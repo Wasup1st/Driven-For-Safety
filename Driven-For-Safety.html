@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Driven for Safety - AI Distraction & Attention Detection</title>
+
+    <!-- TensorFlow.js and Models -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
+    
+    <!-- MediaPipe Models -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --panel-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --safe-color: #22c55e;
+            --warning-color: #eab308;
+            --danger-color: #ef4444;
+            --border-radius: 12px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Header UI */
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem 2rem;
+            background-color: var(--panel-bg);
+            border-bottom: 1px solid #334155;
+            z-index: 10;
+        }
+
+        .logo-container {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .logo-svg { height: 50px; width: auto; }
+        .header-titles h1 { font-size: 1.5rem; font-weight: 700; color: #ffffff; }
+        .header-titles p { font-size: 0.85rem; color: var(--text-muted); }
+
+        /* Main Layout */
+        main {
+            display: flex;
+            flex: 1;
+            padding: 1.5rem;
+            gap: 1.5rem;
+            max-width: 1500px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        /* Camera & Canvas Overlay section */
+        .video-section {
+            flex: 2;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            position: relative;
+        }
+
+        .video-container {
+            position: relative;
+            background-color: #000;
+            border-radius: var(--border-radius);
+            overflow: hidden;
+            border: 2px solid #334155;
+            aspect-ratio: 4/3;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+        }
+
+        video {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror visual */
+        }
+
+        canvas {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            z-index: 5;
+        }
+
+        /* Loading & Debug Info */
+        .overlay-layer {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+            background: rgba(15, 23, 42, 0.8);
+            transition: opacity 0.5s;
+        }
+
+        .debug-info {
+            position: absolute;
+            top: 10px; left: 10px;
+            background: rgba(0,0,0,0.85);
+            padding: 10px 14px;
+            border-radius: 6px;
+            z-index: 20;
+            font-family: monospace;
+            font-size: 13px;
+            color: #10b981;
+            line-height: 1.6;
+            border: 1px solid #334155;
+        }
+        .debug-info span.label { color: #94a3b8; }
+
+        /* Dashboard panels */
+        .dashboard {
+            flex: 1.2;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            min-width: 320px;
+        }
+
+        .card {
+            background-color: var(--panel-bg);
+            border-radius: var(--border-radius);
+            padding: 1.2rem;
+            border: 1px solid #334155;
+        }
+
+        .status-header { font-size: 0.85rem; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.5rem; font-weight: bold; }
+        
+        /* Attention Score Bar */
+        .score-container {
+            margin-bottom: 1rem;
+        }
+        .score-bar-bg {
+            background-color: #334155;
+            height: 24px;
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+            margin-top: 8px;
+        }
+        .score-bar-fill {
+            height: 100%;
+            width: 100%;
+            background: linear-gradient(90deg, var(--danger-color) 0%, var(--warning-color) 50%, var(--safe-color) 100%);
+            transition: width 0.3s ease-out;
+            transform-origin: left;
+        }
+        .score-text {
+            position: absolute;
+            width: 100%;
+            text-align: center;
+            top: 2px;
+            font-weight: bold;
+            font-size: 0.9rem;
+            color: white;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+        }
+
+        /* Metrics Grid */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-bottom: 1rem;
+        }
+        .metric-box {
+            background-color: #0f172a;
+            padding: 10px;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid #334155;
+        }
+        .metric-title { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; }
+        .metric-value { font-size: 1.05rem; font-weight: bold; margin-top: 4px; color: white; }
+
+        /* Status Indicator */
+        .status-indicator {
+            font-size: 1.6rem;
+            font-weight: 800;
+            text-align: center;
+            padding: 1.2rem;
+            border-radius: 8px;
+            background-color: #334155;
+            transition: all 0.2s;
+            margin-bottom: 0.5rem;
+        }
+
+        .status-safe { color: var(--safe-color); border: 2px solid var(--safe-color); }
+        .status-warning { color: var(--warning-color); border: 2px solid var(--warning-color); }
+        .status-danger { color: var(--danger-color); border: 2px solid var(--danger-color); background-color: rgba(239, 68, 68, 0.2); }
+
+        button {
+            padding: 1rem;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            background-color: #2563eb;
+            color: white;
+            transition: background 0.2s;
+        }
+        button:hover:not(:disabled) { background-color: #1d4ed8; }
+        button:disabled { background-color: #475569; cursor: not-allowed; }
+
+        #btn-start {
+            width: auto;
+            padding: 0.75rem 1.5rem;
+        }
+
+        /* Console Logs display */
+        .logs {
+            height: 180px;
+            overflow-y: auto;
+            background-color: #0f172a;
+            border-radius: 8px;
+            padding: 0.8rem;
+            font-family: monospace;
+            font-size: 0.8rem;
+            color: #cbd5e1;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo-container">
+            <svg class="logo-svg" viewBox="0 0 200 80" xmlns="http://www.w3.org/2000/svg">
+                <rect x="10" y="15" width="45" height="45" fill="#0c3466" />
+                <path d="M 10 35 Q 35 15 55 15" fill="none" stroke="#2b8a4a" stroke-width="4" />
+                <path d="M 10 45 Q 45 15 70 20" fill="none" stroke="#2b8a4a" stroke-width="3" />
+                <path d="M 10 25 Q 25 15 40 15" fill="none" stroke="#ffffff" stroke-width="2" />
+                <path d="M 10 60 A 22 22 0 0 1 54 60 Z" fill="#2b8a4a" />
+                <text x="65" y="25" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#0c3466" letter-spacing="1">DRIVEN FOR</text>
+                <text x="65" y="52" font-family="Arial, sans-serif" font-size="30" font-weight="900" fill="#0c3466" letter-spacing="1">SAFETY</text>
+                <rect x="65" y="58" width="120" height="8" fill="#0c3466" />
+                <path d="M 65 58 L 55 66 L 55 70 L 65 70 Z" fill="#0c3466" />
+                <rect x="70" y="70" width="4" height="4" fill="#0c3466" />
+                <rect x="80" y="70" width="4" height="4" fill="#0c3466" />
+                <rect x="90" y="70" width="4" height="4" fill="#2b8a4a" />
+                <rect x="100" y="70" width="4" height="4" fill="#2b8a4a" />
+                <rect x="110" y="70" width="4" height="4" fill="#0c3466" />
+                <rect x="120" y="70" width="4" height="4" fill="#0c3466" />
+                <rect x="130" y="70" width="4" height="4" fill="#0c3466" />
+                <rect x="140" y="70" width="4" height="4" fill="#0c3466" />
+            </svg>
+            <div class="header-titles">
+                <h1>Driven for Safety</h1>
+                <p>Reducing Distracted Driving with AI</p>
+            </div>
+        </div>
+        <button id="btn-start" disabled>Start Detection System</button>
+    </header>
+
+    <main>
+        <!-- Canvas & Video Feed -->
+        <section class="video-section">
+            <div class="video-container">
+                <video id="webcam" autoplay playsinline muted></video>
+                <canvas id="overlay"></canvas>
+                
+                <!-- Debug Panel (Feature 8) -->
+                <div class="debug-info" id="debug-text">
+                    Waiting for initialization...
+                </div>
+
+                <div class="overlay-layer" id="loading-overlay">
+                    <h3 id="loading-text">Initializing Camera...</h3>
+                </div>
+            </div>
+        </section>
+
+        <!-- Analytics Dashboard -->
+        <section class="dashboard">
+            
+            <!-- Context Metrics -->
+            <div class="card">
+                <div class="score-container">
+                    <div class="status-header">Overall Attention Score</div>
+                    <div class="score-bar-bg">
+                        <div id="score-bar" class="score-bar-fill" style="width: 100%;"></div>
+                        <div class="score-text" id="score-text">100 / 100</div>
+                    </div>
+                </div>
+
+                <div class="metrics-grid">
+                    <div class="metric-box">
+                        <div class="metric-title">Gaze Direction</div>
+                        <div class="metric-value" id="gaze-display" style="color: var(--safe-color);">Forward</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-title">Current Activity</div>
+                        <div class="metric-value" id="activity-display" style="font-size: 0.95rem;">Driving Normally</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-title">Vehicle Speed</div>
+                        <div class="metric-value" id="speed-display">0 MPH</div>
+                    </div>
+                </div>
+
+                <div class="status-header">System Alert Status</div>
+                <div id="status-display" class="status-indicator status-safe">IDLE</div>
+                <div id="status-reason" style="text-align: center; color: var(--text-muted); font-weight: bold;">Awaiting models...</div>
+            </div>
+
+            <!-- Event Logs -->
+            <div class="card" style="flex:1; display:flex; flex-direction:column;">
+                <div class="status-header">Behavior Log</div>
+                <div class="logs" id="log-container"></div>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        // DOM Elements
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('overlay');
+        const ctx = canvas.getContext('2d');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const loadingText = document.getElementById('loading-text');
+        const btnStart = document.getElementById('btn-start');
+        
+        // UI Elements
+        const debugText = document.getElementById('debug-text');
+        const statusDisplay = document.getElementById('status-display');
+        const statusReason = document.getElementById('status-reason');
+        const gazeDisplay = document.getElementById('gaze-display');
+        const activityDisplay = document.getElementById('activity-display');
+        const speedDisplay = document.getElementById('speed-display');
+        const scoreBar = document.getElementById('score-bar');
+        const scoreText = document.getElementById('score-text');
+        const logContainer = document.getElementById('log-container');
+
+        // State & Models
+        let cocoModel = null;
+        let faceModel = null;
+        let handsModel = null;
+        let isRunning = false;
+        let isProcessingFrame = false;
+        let latestFaceResults = null;
+        let latestHandResults = null;
+        
+        // --- ADVANCED STATE VARIABLES ---
+        let attentionScore = 100;
+        let lastLogicUpdate = Date.now();
+        
+        let currentGaze = "Forward";
+        let gazeStartTime = Date.now();
+        
+        let finalPhoneStatus = false;
+        let hadPhoneLastFrame = false; 
+        
+        // Temporal tracking for heuristic logic (Feature 4)
+        let suspectStartTime = 0;
+        let clearPhoneTime = 0;
+        const PHONE_PERSISTENCE_MS = 2000;
+        const TEXTING_CONFIRMATION_MS = 1000; // 1 second to confirm occluded/texting behavior
+
+        // Mock Speed state
+        let simulatedSpeed = 0;
+        let targetSpeed = 45;
+
+        // Custom Logger
+        function logMsg(msg, isEvent=false) {
+            if(!isEvent) console.log(msg);
+            const div = document.createElement('div');
+            const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'});
+            div.innerText = `[${time}] ${msg}`;
+            if(isEvent && msg.includes("HIGH RISK")) div.style.color = "var(--danger-color)";
+            if(isEvent && msg.includes("WARNING")) div.style.color = "var(--warning-color)";
+            
+            logContainer.appendChild(div);
+            logContainer.scrollTop = logContainer.scrollHeight;
+            if(logContainer.childElementCount > 30) logContainer.removeChild(logContainer.firstChild);
+        }
+
+        // --- MODEL LOADING ---
+        async function loadModels() {
+            try {
+                logMsg("Initializing AI setup...");
+                
+                loadingText.innerText = "Loading COCO-SSD (Objects)...";
+                cocoModel = await cocoSsd.load();
+                
+                loadingText.innerText = "Loading MediaPipe FaceMesh (Gaze)...";
+                faceModel = new FaceMesh({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
+                faceModel.setOptions({
+                    maxNumFaces: 1,
+                    refineLandmarks: true,
+                    minDetectionConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+                faceModel.onResults(results => { latestFaceResults = results; });
+                await faceModel.initialize();
+
+                loadingText.innerText = "Loading MediaPipe Hands (Proximity/Occlusion)...";
+                handsModel = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+                handsModel.setOptions({
+                    maxNumHands: 2,
+                    modelComplexity: 1,
+                    minDetectionConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+                handsModel.onResults(results => { latestHandResults = results; });
+                await handsModel.initialize();
+                
+                loadingOverlay.style.display = 'none';
+                btnStart.disabled = false;
+                logMsg("All systems ready. Waiting for user to start.");
+            } catch (err) {
+                logMsg("ERROR loading models: " + err.message);
+                loadingText.innerText = "Failed to load AI Models.";
+            }
+        }
+
+        // --- CAMERA PIPELINE ---
+        async function setupCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false
+                });
+                video.srcObject = stream;
+                return new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        canvas.width = video.videoWidth;
+                        canvas.height = video.videoHeight;
+                        video.play();
+                        resolve();
+                    };
+                });
+            } catch (err) {
+                loadingText.innerText = "Camera Permission Denied.";
+                throw err;
+            }
+        }
+
+        async function init() {
+            await setupCamera();
+            await loadModels();
+        }
+
+        btnStart.addEventListener('click', () => {
+            if (!isRunning) {
+                isRunning = true;
+                btnStart.innerText = "Stop Detection System";
+                btnStart.style.backgroundColor = "var(--danger-color)";
+                lastLogicUpdate = Date.now();
+                gazeStartTime = Date.now();
+                attentionScore = 100;
+                simulatedSpeed = 10;
+                logMsg("Detection running...");
+                requestAnimationFrame(detectionLoop);
+            } else {
+                isRunning = false;
+                btnStart.innerText = "Start Detection System";
+                btnStart.style.backgroundColor = "#2563eb";
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                simulatedSpeed = 0;
+                speedDisplay.innerText = "0 MPH";
+                updateUI("SAFE", "System Stopped", "Forward", "Idle");
+            }
+        });
+
+        // --- CORE LOOP ---
+        async function detectionLoop() {
+            if (!isRunning) return;
+
+            if (video.readyState === 4 && !isProcessingFrame) {
+                isProcessingFrame = true;
+                try {
+                    // Feature 2: Lower detection threshold (0.3) to catch partial phones
+                    const predictions = await cocoModel.detect(video, 20, 0.3);
+                    await faceModel.send({image: video}); 
+                    await handsModel.send({image: video}); 
+                    
+                    processLogicAndDraw(predictions, latestFaceResults, latestHandResults);
+                } catch (err) {
+                    console.error("Inference Error:", err);
+                }
+                isProcessingFrame = false;
+            }
+            requestAnimationFrame(detectionLoop);
+        }
+
+        // --- BEHAVIOR LOGIC & DRAWING ---
+        function processLogicAndDraw(objects, faceData, handData) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const now = Date.now();
+            const dtSec = (now - lastLogicUpdate) / 1000;
+            lastLogicUpdate = now;
+
+            // Debug variables
+            let dbgPhoneConf = 0;
+            let dbgOccluded = false;
+            let dbgHandDist = "N/A";
+            let dbgClass = "None";
+
+            // Identify face context
+            let faceMeshFound = false;
+            let chinY = 0.5; // Default normalized middle of screen
+            if (faceData && faceData.multiFaceLandmarks && faceData.multiFaceLandmarks.length > 0) {
+                faceMeshFound = true;
+                chinY = faceData.multiFaceLandmarks[0][152].y; // bottom of chin
+            }
+
+            // Identify Hand context
+            let handCentroids = [];
+            if (handData && handData.multiHandLandmarks) {
+                handData.multiHandLandmarks.forEach(hand => {
+                    let cx = 0, cy = 0;
+                    hand.forEach(lm => { cx += lm.x; cy += lm.y; });
+                    handCentroids.push({ x: cx / hand.length, y: cy / hand.length });
+                });
+            }
+
+            let handsDistance = -1;
+            if (handCentroids.length === 2) {
+                const dx = handCentroids[0].x - handCentroids[1].x;
+                const dy = handCentroids[0].y - handCentroids[1].y;
+                handsDistance = Math.sqrt(dx*dx + dy*dy);
+                dbgHandDist = handsDistance.toFixed(2);
+            }
+
+            // Object Detection
+            const targetClasses = ['cell phone', 'person', 'cup', 'bottle', 'sandwich', 'apple'];
+            let eatingOrDrinking = false;
+            let clearPhoneDetected = false;
+            let lowConfPhone = null;
+
+            objects.forEach(obj => {
+                if (!targetClasses.includes(obj.class)) return;
+                
+                if (obj.class === 'cell phone') {
+                    if (obj.score >= 0.55) {
+                        clearPhoneDetected = true;
+                        dbgPhoneConf = obj.score;
+                        clearPhoneTime = now;
+                    } else if (obj.score >= 0.3) {
+                        lowConfPhone = obj; // Potential occluded phone
+                    }
+                }
+                if (['cup', 'bottle', 'sandwich', 'apple'].includes(obj.class)) eatingOrDrinking = true;
+                
+                drawObjectBox(obj);
+            });
+
+            // Feature 1 & 2: Partial Phone Detection + Hand Overlap Logic
+            let occludedPhoneDetected = false;
+            if (lowConfPhone && !clearPhoneDetected) {
+                dbgPhoneConf = lowConfPhone.score;
+                const bbox = lowConfPhone.bbox; // [x, y, w, h] (Absolute unmirrored)
+                
+                // Check if any hand overlaps the low confidence bounding box
+                handCentroids.forEach(c => {
+                    const hx = c.x * canvas.width;
+                    const hy = c.y * canvas.height;
+                    const pad = 60; // Extra generous bounding box for proximity
+                    if (hx > bbox[0] - pad && hx < bbox[0] + bbox[2] + pad &&
+                        hy > bbox[1] - pad && hy < bbox[1] + bbox[3] + pad) {
+                        occludedPhoneDetected = true;
+                    }
+                });
+            }
+
+            // Feature 3: Hand Occlusion Heuristic (Texting Behavior without visible phone)
+            let textingBehavior = false;
+            if (!clearPhoneDetected && !occludedPhoneDetected && handCentroids.length === 2) {
+                if (handsDistance < 0.20) { // Hands are close together
+                    const avgY = (handCentroids[0].y + handCentroids[1].y) / 2;
+                    if (avgY > chinY) { // Hands are below the face
+                        textingBehavior = true;
+                    }
+                }
+            }
+
+            // Feature 4: Temporal Confirmation
+            let currentActivity = "Driving Normally";
+            let suspiciousActivity = false;
+
+            if (textingBehavior || occludedPhoneDetected) {
+                if (suspectStartTime === 0) suspectStartTime = now;
+                dbgOccluded = true;
+                suspiciousActivity = true;
+            } else {
+                suspectStartTime = 0;
+            }
+
+            // Determine Final Classification (Feature 5 & 6)
+            finalPhoneStatus = false;
+            
+            if (clearPhoneDetected || (now - clearPhoneTime) < PHONE_PERSISTENCE_MS) {
+                finalPhoneStatus = true;
+                currentActivity = "Phone Detected";
+                dbgClass = "Clear Phone";
+                suspectStartTime = 0; // Reset heuristics
+            } 
+            else if (suspiciousActivity) {
+                const duration = now - suspectStartTime;
+                if (duration > TEXTING_CONFIRMATION_MS) {
+                    // Confirmed occluded usage after 1 second
+                    finalPhoneStatus = true;
+                    currentActivity = textingBehavior ? "Texting Behavior Detected" : "Phone Likely (Occluded)";
+                    dbgClass = "Confirmed Occluded";
+                } else {
+                    currentActivity = "Suspicious Hand Placement";
+                    dbgClass = "Evaluating (" + duration + "ms)";
+                }
+            }
+            else if (eatingOrDrinking) {
+                currentActivity = "Eating/Drinking";
+                dbgClass = "Consuming";
+            }
+
+            // Draw Hands & Inferred Boxes (Feature 7)
+            if (handData && handData.multiHandLandmarks) {
+                ctx.save();
+                ctx.translate(canvas.width, 0);
+                ctx.scale(-1, 1);
+                handData.multiHandLandmarks.forEach(landmarks => {
+                    drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: 'rgba(234, 179, 8, 0.7)', lineWidth: 2});
+                    for(let lm of landmarks) {
+                        ctx.beginPath(); ctx.arc(lm.x * canvas.width, lm.y * canvas.height, 3, 0, 2*Math.PI);
+                        ctx.fillStyle = '#ffffff'; ctx.fill();
+                    }
+                });
+
+                if (textingBehavior || occludedPhoneDetected) {
+                    // Highlight area between hands
+                    if (handCentroids.length === 2) {
+                        const hx1 = handCentroids[0].x * canvas.width;
+                        const hy1 = handCentroids[0].y * canvas.height;
+                        const hx2 = handCentroids[1].x * canvas.width;
+                        const hy2 = handCentroids[1].y * canvas.height;
+                        
+                        ctx.beginPath();
+                        ctx.moveTo(hx1, hy1);
+                        ctx.lineTo(hx2, hy2);
+                        ctx.strokeStyle = 'rgba(239, 68, 68, 0.6)';
+                        ctx.lineWidth = 4;
+                        ctx.setLineDash([5, 5]);
+                        ctx.stroke();
+                        ctx.setLineDash([]);
+
+                        // Draw inferred likely phone box
+                        const midX = (hx1 + hx2) / 2;
+                        const midY = (hy1 + hy2) / 2;
+                        ctx.strokeStyle = '#ef4444';
+                        ctx.strokeRect(midX - 40, midY - 60, 80, 120);
+                        
+                        ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
+                        ctx.fillRect(midX - 40, midY - 60, 80, 120);
+                    }
+                }
+                ctx.restore();
+            }
+
+            // Gaze Logic
+            let newGaze = "No Face";
+            if (faceMeshFound) {
+                const landmarks = faceData.multiFaceLandmarks[0];
+                const yawRatio = (landmarks[1].x - landmarks[234].x) / (landmarks[454].x - landmarks[234].x);
+                const pitchRatio = (landmarks[1].y - landmarks[10].y) / (landmarks[152].y - landmarks[10].y);
+
+                if (pitchRatio > 0.60) newGaze = "Down";
+                else if (yawRatio < 0.40) newGaze = "Right"; 
+                else if (yawRatio > 0.60) newGaze = "Left";  
+                else newGaze = "Forward";
+
+                drawFaceAndGaze(landmarks, yawRatio, pitchRatio);
+            }
+
+            if (newGaze !== currentGaze) {
+                currentGaze = newGaze;
+                gazeStartTime = now;
+            }
+            const gazeDuration = now - gazeStartTime;
+
+            // Speed Simulation
+            if (isRunning) {
+                if (Math.random() < 0.05) targetSpeed = 35 + Math.random() * 35; 
+                simulatedSpeed += (targetSpeed - simulatedSpeed) * 0.02; 
+                speedDisplay.innerText = `${Math.round(simulatedSpeed)} MPH`;
+            }
+
+            // Feature 5: Attention Score System penalties
+            if (finalPhoneStatus && !hadPhoneLastFrame) {
+                attentionScore -= 30; // Instant drop
+                logMsg("PHONE/TEXTING USAGE DETECTED - PENALTY -30", true);
+            }
+            hadPhoneLastFrame = finalPhoneStatus;
+
+            if (currentGaze === "Left" || currentGaze === "Right") attentionScore -= (10 * dtSec);
+            if (currentGaze === "Down") attentionScore -= (15 * dtSec);
+            if (eatingOrDrinking) attentionScore -= (5 * dtSec);
+
+            if (currentGaze === "Forward" && !finalPhoneStatus && !eatingOrDrinking) {
+                attentionScore += (10 * dtSec);
+            }
+            attentionScore = Math.max(0, Math.min(100, attentionScore));
+
+            // Context-Aware Distraction Logic
+            let status = "SAFE";
+            let reason = "FOCUSED";
+
+            if (finalPhoneStatus) {
+                status = "DISTRACTED"; reason = "HIGH RISK: " + currentActivity.toUpperCase();
+                drawAlertOverlay();
+            } else if (currentActivity === "Suspicious Hand Placement") {
+                status = "WARNING"; reason = "MEDIUM RISK: SUSPICIOUS HANDS";
+            } else if ((currentGaze === "Left" || currentGaze === "Right" || currentGaze === "Down") && gazeDuration > 2000) {
+                status = "DISTRACTED"; reason = "ATTENTION OFF ROAD";
+                drawAlertOverlay();
+            } else if (!faceMeshFound) {
+                status = "WARNING"; reason = "FACE NOT VISIBLE";
+            } else if (eatingOrDrinking && currentGaze !== "Forward") {
+                status = "WARNING"; reason = "MEDIUM RISK: EATING & LOOKING AWAY";
+            } else if (eatingOrDrinking && currentGaze === "Forward") {
+                status = "WARNING"; reason = "LOW RISK: EATING/DRINKING";
+            } else if (currentGaze !== "Forward") {
+                status = "WARNING"; reason = "GAZE DIVERTED";
+            }
+
+            // Feature 8: Update Debug Panel
+            debugText.innerHTML = `
+                <span class="label">Phone Conf:</span> ${(dbgPhoneConf*100).toFixed(0)}% <br>
+                <span class="label">Hand Dist:</span> ${dbgHandDist} <br>
+                <span class="label">Occluded Flag:</span> <span style="color:${dbgOccluded?'#ef4444':'#10b981'}">${dbgOccluded}</span> <br>
+                <span class="label">Heuristic:</span> ${dbgClass} <br>
+                <span class="label">FPS:</span> ${(1/dtSec).toFixed(1)}
+            `;
+
+            updateUI(status, reason, currentGaze, currentActivity);
+        }
+
+        // --- DRAWING HELPERS ---
+        function drawObjectBox(obj) {
+            ctx.lineWidth = 3;
+            ctx.font = 'bold 16px Arial';
+            ctx.textBaseline = 'top';
+
+            // Absolute unmirrored coords mapped to visually mirrored canvas
+            const flippedX = canvas.width - obj.bbox[0] - obj.bbox[2];
+            const y = obj.bbox[1];
+            const width = obj.bbox[2];
+            const height = obj.bbox[3];
+
+            const isDanger = obj.class === 'cell phone';
+            const isOccluded = isDanger && obj.score < 0.55;
+            
+            const color = isDanger ? (isOccluded ? '#f97316' : '#ef4444') : '#3b82f6';
+            
+            ctx.strokeStyle = color;
+            ctx.fillStyle = color;
+            
+            if (isOccluded) ctx.setLineDash([5, 5]);
+            ctx.strokeRect(flippedX, y, width, height);
+            ctx.setLineDash([]);
+
+            const label = `${obj.class.toUpperCase()} ${Math.round(obj.score * 100)}%`;
+            const textWidth = ctx.measureText(label).width;
+            
+            ctx.fillRect(flippedX, y > 25 ? y - 25 : y, textWidth + 10, 24);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(label, flippedX + 5, y > 25 ? y - 20 : y + 5);
+        }
+
+        function drawFaceAndGaze(landmarks, yawRatio, pitchRatio) {
+            ctx.save();
+            ctx.translate(canvas.width, 0);
+            ctx.scale(-1, 1);
+
+            drawConnectors(ctx, landmarks, FACEMESH_TESSELATION, {color: 'rgba(34, 197, 94, 0.3)', lineWidth: 1});
+            drawConnectors(ctx, landmarks, FACEMESH_FACE_OVAL, {color: '#22c55e', lineWidth: 1});
+            
+            const rightIris = landmarks[468];
+            const leftIris = landmarks[473];
+            
+            if (rightIris && leftIris) {
+                ctx.fillStyle = '#ef4444'; 
+                ctx.beginPath(); ctx.arc(rightIris.x * canvas.width, rightIris.y * canvas.height, 4, 0, 2*Math.PI); ctx.fill();
+                ctx.beginPath(); ctx.arc(leftIris.x * canvas.width, leftIris.y * canvas.height, 4, 0, 2*Math.PI); ctx.fill();
+            }
+
+            const nose = landmarks[1];
+            const nx = nose.x * canvas.width;
+            const ny = nose.y * canvas.height;
+            const multiplier = 150;
+            const dx = (yawRatio - 0.5) * multiplier;
+            const dy = (pitchRatio - 0.5) * multiplier;
+
+            ctx.beginPath();
+            ctx.moveTo(nx, ny);
+            ctx.lineTo(nx + dx, ny + dy);
+            ctx.strokeStyle = '#ef4444';
+            ctx.lineWidth = 4;
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.arc(nx + dx, ny + dy, 5, 0, 2*Math.PI);
+            ctx.fillStyle = '#ef4444';
+            ctx.fill();
+
+            ctx.restore();
+        }
+
+        function drawAlertOverlay() {
+            ctx.fillStyle = 'rgba(239, 68, 68, 0.3)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        // --- UI UPDATER ---
+        function updateUI(status, reason, gaze, activity) {
+            if (statusDisplay.innerText !== status || statusReason.innerText !== reason) {
+                if(status !== "SAFE") logMsg(`${status}: ${reason}`, true);
+            }
+
+            statusDisplay.innerText = status;
+            statusReason.innerText = reason;
+            
+            statusDisplay.className = "status-indicator"; 
+            if (status === "SAFE") statusDisplay.classList.add("status-safe");
+            if (status === "WARNING") statusDisplay.classList.add("status-warning");
+            if (status === "DISTRACTED") statusDisplay.classList.add("status-danger");
+
+            gazeDisplay.innerText = gaze;
+            gazeDisplay.style.color = gaze === "Forward" ? "var(--safe-color)" : "var(--warning-color)";
+            
+            activityDisplay.innerText = activity;
+            if (activity.includes("Texting") || activity.includes("Phone")) activityDisplay.style.color = "var(--danger-color)";
+            else activityDisplay.style.color = "white";
+
+            const roundedScore = Math.round(attentionScore);
+            scoreText.innerText = `${roundedScore} / 100`;
+            scoreBar.style.width = `${roundedScore}%`;
+            
+            if (roundedScore > 75) scoreBar.style.background = "var(--safe-color)";
+            else if (roundedScore > 40) scoreBar.style.background = "var(--warning-color)";
+            else scoreBar.style.background = "var(--danger-color)";
+        }
+
+        // Kickoff script
+        init();
+
+    </script>
+</body>
+</html>
