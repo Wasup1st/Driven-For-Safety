@@ -158,10 +158,15 @@
 
         .status-header { font-size: 0.85rem; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.5rem; font-weight: bold; }
         
-        /* Attention Score Bar */
-        .score-container {
+        /* Score Bars */
+        .scores-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
             margin-bottom: 1rem;
         }
+        
+        .score-container { width: 100%; }
         .score-bar-bg {
             background-color: #334155;
             height: 24px;
@@ -174,7 +179,7 @@
             height: 100%;
             width: 100%;
             background: linear-gradient(90deg, var(--danger-color) 0%, var(--warning-color) 50%, var(--safe-color) 100%);
-            transition: width 0.3s ease-out;
+            transition: width 0.3s ease-out, background 0.3s;
             transform-origin: left;
         }
         .score-text {
@@ -203,7 +208,7 @@
             border: 1px solid #334155;
         }
         .metric-title { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; }
-        .metric-value { font-size: 1.05rem; font-weight: bold; margin-top: 4px; color: white; }
+        .metric-value { font-size: 1rem; font-weight: bold; margin-top: 4px; color: white; }
 
         /* Status Indicator */
         .status-indicator {
@@ -219,7 +224,13 @@
 
         .status-safe { color: var(--safe-color); border: 2px solid var(--safe-color); }
         .status-warning { color: var(--warning-color); border: 2px solid var(--warning-color); }
-        .status-danger { color: var(--danger-color); border: 2px solid var(--danger-color); background-color: rgba(239, 68, 68, 0.2); }
+        .status-danger { color: var(--danger-color); border: 2px solid var(--danger-color); background-color: rgba(239, 68, 68, 0.2); animation: pulseAlert 1s infinite; }
+
+        @keyframes pulseAlert {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
 
         button {
             padding: 1rem;
@@ -235,14 +246,12 @@
         button:hover:not(:disabled) { background-color: #1d4ed8; }
         button:disabled { background-color: #475569; cursor: not-allowed; }
 
-        #btn-start {
-            width: auto;
-            padding: 0.75rem 1.5rem;
-        }
+        #btn-start { width: auto; padding: 0.75rem 1.5rem; }
 
         /* Console Logs display */
         .logs {
-            height: 180px;
+            flex: 1;
+            min-height: 120px;
             overflow-y: auto;
             background-color: #0f172a;
             border-radius: 8px;
@@ -294,7 +303,7 @@
                 <video id="webcam" autoplay playsinline muted></video>
                 <canvas id="overlay"></canvas>
                 
-                <!-- Debug Panel (Feature 8) -->
+                <!-- Debug Panel -->
                 <div class="debug-info" id="debug-text">
                     Waiting for initialization...
                 </div>
@@ -308,16 +317,26 @@
         <!-- Analytics Dashboard -->
         <section class="dashboard">
             
-            <!-- Context Metrics -->
             <div class="card">
-                <div class="score-container">
-                    <div class="status-header">Overall Attention Score</div>
-                    <div class="score-bar-bg">
-                        <div id="score-bar" class="score-bar-fill" style="width: 100%;"></div>
-                        <div class="score-text" id="score-text">100 / 100</div>
+                <!-- Dual Score Bars -->
+                <div class="scores-grid">
+                    <div class="score-container">
+                        <div class="status-header">Attention Score</div>
+                        <div class="score-bar-bg">
+                            <div id="attn-score-bar" class="score-bar-fill" style="width: 100%;"></div>
+                            <div class="score-text" id="attn-score-text">100 / 100</div>
+                        </div>
+                    </div>
+                    <div class="score-container">
+                        <div class="status-header">Alertness (Fatigue) Score</div>
+                        <div class="score-bar-bg">
+                            <div id="drowsy-score-bar" class="score-bar-fill" style="width: 100%;"></div>
+                            <div class="score-text" id="drowsy-score-text">100 / 100</div>
+                        </div>
                     </div>
                 </div>
 
+                <!-- Expanded Metrics Grid -->
                 <div class="metrics-grid">
                     <div class="metric-box">
                         <div class="metric-title">Gaze Direction</div>
@@ -325,7 +344,19 @@
                     </div>
                     <div class="metric-box">
                         <div class="metric-title">Current Activity</div>
-                        <div class="metric-value" id="activity-display" style="font-size: 0.95rem;">Driving Normally</div>
+                        <div class="metric-value" id="activity-display">Driving Normally</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-title">Eye Status</div>
+                        <div class="metric-value" id="eye-status-display">Open</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-title">Fatigue Level</div>
+                        <div class="metric-value" id="fatigue-display" style="color: var(--safe-color);">Alert</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-title">Blink Rate</div>
+                        <div class="metric-value" id="blink-display">0 / 30s</div>
                     </div>
                     <div class="metric-box">
                         <div class="metric-title">Vehicle Speed</div>
@@ -361,9 +392,16 @@
         const statusReason = document.getElementById('status-reason');
         const gazeDisplay = document.getElementById('gaze-display');
         const activityDisplay = document.getElementById('activity-display');
+        const eyeStatusDisplay = document.getElementById('eye-status-display');
+        const fatigueDisplay = document.getElementById('fatigue-display');
+        const blinkDisplay = document.getElementById('blink-display');
         const speedDisplay = document.getElementById('speed-display');
-        const scoreBar = document.getElementById('score-bar');
-        const scoreText = document.getElementById('score-text');
+        
+        const attnScoreBar = document.getElementById('attn-score-bar');
+        const attnScoreText = document.getElementById('attn-score-text');
+        const drowsyScoreBar = document.getElementById('drowsy-score-bar');
+        const drowsyScoreText = document.getElementById('drowsy-score-text');
+        
         const logContainer = document.getElementById('log-container');
 
         // State & Models
@@ -372,44 +410,83 @@
         let handsModel = null;
         let isRunning = false;
         let isProcessingFrame = false;
-        let latestFaceResults = null;
-        let latestHandResults = null;
         
-        // TASK 4: Optimize Performance Variables
+        // Performance Variables
         let lastFrameTime = 0;
-        const TARGET_FPS = 12; // Reduced frame rate to avoid camera lag without losing real-time feel
+        const TARGET_FPS = 12; 
         const FPS_INTERVAL = 1000 / TARGET_FPS;
 
-        // --- ADVANCED STATE VARIABLES ---
+        // Audio Context for Alerts
+        let audioCtx = null;
+        let lastBeepTime = 0;
+
+        // --- DISTRACTION & GAZE VARIABLES ---
         let attentionScore = 100;
         let lastLogicUpdate = Date.now();
         let currentGaze = "Forward";
         let gazeStartTime = Date.now();
+        
         let finalPhoneStatus = false;
         let hadPhoneLastFrame = false; 
-        
-        // Temporal tracking for heuristic logic (Tasks 1C & 4)
         let suspectStartTime = 0;
         let clearPhoneTime = 0;
-        const PHONE_PERSISTENCE_MS = 2000;
-        const TEXTING_CONFIRMATION_MS = 1500; // Increased to 1.5 seconds to reduce false positives
 
+        // --- DROWSINESS VARIABLES ---
+        let alertnessScore = 100;
+        let fatigueLevel = "Alert";
+        let eyeStatus = "Open";
+        
+        let eyesClosed = false;
+        let wasEyesClosed = false;
+        let eyeClosureStartTime = 0;
+        let currentEyeClosureDuration = 0;
+        
+        let blinkHistory = []; // Timestamps of recent blinks
+        const BLINK_WINDOW_MS = 30000; // Track blinks over 30 seconds
+
+        const EAR_THRESHOLD = 0.22; // Threshold for eye closure
+        
         // Mock Speed state
         let simulatedSpeed = 0;
         let targetSpeed = 45;
 
         // Custom Logger
-        function logMsg(msg, isEvent=false) {
-            if(!isEvent) console.log(msg);
+        function logMsg(msg, type="info") {
             const div = document.createElement('div');
             const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'});
             div.innerText = `[${time}] ${msg}`;
-            if(isEvent && msg.includes("HIGH RISK")) div.style.color = "var(--danger-color)";
-            if(isEvent && msg.includes("WARNING")) div.style.color = "var(--warning-color)";
+            
+            if(type === "danger") div.style.color = "var(--danger-color)";
+            if(type === "warning") div.style.color = "var(--warning-color)";
+            if(type === "safe") div.style.color = "var(--safe-color)";
             
             logContainer.appendChild(div);
             logContainer.scrollTop = logContainer.scrollHeight;
-            if(logContainer.childElementCount > 30) logContainer.removeChild(logContainer.firstChild);
+            if(logContainer.childElementCount > 40) logContainer.removeChild(logContainer.firstChild);
+        }
+
+        // Web Audio API Beep System
+        function playBeep(isCritical) {
+            if (!audioCtx) return;
+            const now = Date.now();
+            const beepDelay = isCritical ? 300 : 1000; // Fast beep for critical, slow for warning
+
+            if (now - lastBeepTime > beepDelay) {
+                lastBeepTime = now;
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                
+                osc.type = isCritical ? 'square' : 'sine';
+                osc.frequency.setValueAtTime(isCritical ? 800 : 500, audioCtx.currentTime);
+                
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+                
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.3);
+            }
         }
 
         // --- MODEL LOADING ---
@@ -420,41 +497,50 @@
                 loadingText.innerText = "Loading COCO-SSD (Objects)...";
                 cocoModel = await cocoSsd.load();
                 
-                loadingText.innerText = "Loading MediaPipe FaceMesh (Gaze)...";
+                loadingText.innerText = "Loading MediaPipe FaceMesh (Gaze & Drowsiness)...";
                 faceModel = new FaceMesh({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
                 faceModel.setOptions({
                     maxNumFaces: 1,
-                    refineLandmarks: true,
+                    refineLandmarks: true, // Needed for iris/eye tracking
                     minDetectionConfidence: 0.5,
                     minTrackingConfidence: 0.5
                 });
-                faceModel.onResults(results => { latestFaceResults = results; });
+                // Process Face internally to avoid callback scoping issues
+                faceModel.onResults(handleFaceResults);
                 await faceModel.initialize();
 
                 loadingText.innerText = "Loading MediaPipe Hands (Proximity/Occlusion)...";
                 handsModel = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
                 handsModel.setOptions({
                     maxNumHands: 2,
-                    modelComplexity: 1, // Task 4: Optimized complexity
+                    modelComplexity: 1,
                     minDetectionConfidence: 0.5,
                     minTrackingConfidence: 0.5
                 });
-                handsModel.onResults(results => { latestHandResults = results; });
+                handsModel.onResults(handleHandResults);
                 await handsModel.initialize();
                 
-                loadingOverlay.style.display = 'none';
+                loadingOverlay.style.opacity = 0;
+                setTimeout(() => loadingOverlay.style.display = 'none', 500);
+                
                 btnStart.disabled = false;
-                logMsg("All systems ready. Waiting for user to start.");
+                logMsg("All systems ready. Waiting for user to start.", "safe");
             } catch (err) {
-                logMsg("ERROR loading models: " + err.message);
+                logMsg("ERROR loading models: " + err.message, "danger");
                 loadingText.innerText = "Failed to load AI Models.";
             }
         }
 
+        // Global holders for async model results
+        let currentFaceData = null;
+        let currentHandData = null;
+        
+        function handleFaceResults(results) { currentFaceData = results; }
+        function handleHandResults(results) { currentHandData = results; }
+
         // --- CAMERA PIPELINE ---
         async function setupCamera() {
             try {
-                // Task 4: Downscale AI processing input (640x480 is extremely fast for inference)
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false
                 });
@@ -479,16 +565,22 @@
         }
 
         btnStart.addEventListener('click', () => {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); // Init audio context on user interaction
+
             if (!isRunning) {
                 isRunning = true;
                 btnStart.innerText = "Stop Detection System";
                 btnStart.style.backgroundColor = "var(--danger-color)";
+                
                 lastLogicUpdate = Date.now();
                 gazeStartTime = Date.now();
                 attentionScore = 100;
+                alertnessScore = 100;
+                blinkHistory = [];
                 simulatedSpeed = 10;
                 lastFrameTime = performance.now();
-                logMsg("Detection running...");
+                
+                logMsg("Detection system actively monitoring.", "safe");
                 requestAnimationFrame(detectionLoop);
             } else {
                 isRunning = false;
@@ -496,7 +588,6 @@
                 btnStart.style.backgroundColor = "#2563eb";
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 simulatedSpeed = 0;
-                speedDisplay.innerText = "0 MPH";
                 updateUI("SAFE", "System Stopped", "Forward", "Idle");
             }
         });
@@ -505,22 +596,23 @@
         async function detectionLoop(timestamp) {
             if (!isRunning) return;
 
-            // TASK 4: Run detection at a reduced frame rate (throttle using timestamp)
             if (video.readyState === 4 && !isProcessingFrame) {
                 if (!timestamp) timestamp = performance.now();
                 const elapsed = timestamp - lastFrameTime;
 
                 if (elapsed > FPS_INTERVAL) {
-                    lastFrameTime = timestamp - (elapsed % FPS_INTERVAL); // Calibrate timing
+                    lastFrameTime = timestamp - (elapsed % FPS_INTERVAL);
                     isProcessingFrame = true;
                     
                     try {
-                        // Task 1B: Allow weak object detection down to 0.2 for partial occlusions
-                        const predictions = await cocoModel.detect(video, 20, 0.2);
-                        await faceModel.send({image: video}); 
-                        await handsModel.send({image: video}); 
+                        // Parallel Inference for speed
+                        const pCoco = cocoModel.detect(video, 20, 0.2);
+                        const pFace = faceModel.send({image: video}); 
+                        const pHand = handsModel.send({image: video}); 
                         
-                        processLogicAndDraw(predictions, latestFaceResults, latestHandResults);
+                        const [objects] = await Promise.all([pCoco, pFace, pHand]);
+                        
+                        processLogicAndDraw(objects, currentFaceData, currentHandData);
                     } catch (err) {
                         console.error("Inference Error:", err);
                     }
@@ -531,16 +623,96 @@
             requestAnimationFrame(detectionLoop);
         }
 
+        // --- CALCULATION HELPERS ---
+        function calculateEAR(landmarks) {
+            // Simplified, robust Euclidean Eye Aspect Ratio estimation using specific landmarks
+            const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
+            
+            // Left Eye (User's left, Mesh right)
+            const leftV1 = dist(landmarks[159], landmarks[145]);
+            const leftV2 = dist(landmarks[158], landmarks[153]);
+            const leftH = dist(landmarks[33], landmarks[133]);
+            const earLeft = (leftV1 + leftV2) / (2.0 * leftH);
+
+            // Right Eye
+            const rightV1 = dist(landmarks[386], landmarks[374]);
+            const rightV2 = dist(landmarks[385], landmarks[373]);
+            const rightH = dist(landmarks[362], landmarks[263]);
+            const earRight = (rightV1 + rightV2) / (2.0 * rightH);
+
+            return (earLeft + earRight) / 2.0;
+        }
+
         // --- BEHAVIOR LOGIC & DRAWING ---
         function processLogicAndDraw(objects, faceData, handData) {
-            // Task 4E: Minimize canvas redraws by clearing only once per processed frame
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
             const now = Date.now();
             const dtSec = (now - lastLogicUpdate) / 1000;
             lastLogicUpdate = now;
 
-            // Step 1: Identify Hand context (Task 1A)
+            // --- 1. Face, Gaze, and Drowsiness (Tasks 1, 2, 3) ---
+            let faceMeshFound = false;
+            let chinY = 0.5;
+            let newGaze = "No Face";
+            let headPitchRatio = 0.5;
+            let currentEAR = 0.3;
+
+            if (faceData && faceData.multiFaceLandmarks && faceData.multiFaceLandmarks.length > 0) {
+                faceMeshFound = true;
+                const landmarks = faceData.multiFaceLandmarks[0];
+                chinY = landmarks[152].y; 
+                
+                const yawRatio = (landmarks[1].x - landmarks[234].x) / (landmarks[454].x - landmarks[234].x);
+                headPitchRatio = (landmarks[1].y - landmarks[10].y) / (landmarks[152].y - landmarks[10].y);
+
+                // Gaze estimation
+                if (headPitchRatio > 0.65) newGaze = "Down";
+                else if (yawRatio < 0.40) newGaze = "Right"; 
+                else if (yawRatio > 0.60) newGaze = "Left";  
+                else newGaze = "Forward";
+
+                // Eye Aspect Ratio (EAR) for Blinks/Closure
+                currentEAR = calculateEAR(landmarks);
+                eyesClosed = currentEAR < EAR_THRESHOLD;
+
+                drawFaceAndEyes(landmarks, yawRatio, headPitchRatio, eyesClosed);
+            }
+
+            // Gaze timer
+            if (newGaze !== currentGaze) {
+                currentGaze = newGaze;
+                gazeStartTime = now;
+            }
+            const gazeDuration = now - gazeStartTime;
+
+            // --- 2. Blink and Eye Closure Logic ---
+            if (eyesClosed) {
+                if (!wasEyesClosed) eyeClosureStartTime = now;
+                currentEyeClosureDuration = now - eyeClosureStartTime;
+                
+                if (currentEyeClosureDuration > 2500) eyeStatus = "Critical Closure";
+                else if (currentEyeClosureDuration > 1000) eyeStatus = "Slow Blink / Microsleep";
+                else eyeStatus = "Closed";
+            } else {
+                if (wasEyesClosed) {
+                    // Blink ended
+                    const duration = now - eyeClosureStartTime;
+                    if (duration > 50 && duration < 1000) {
+                        blinkHistory.push(now); // Record standard blink
+                    }
+                }
+                currentEyeClosureDuration = 0;
+                eyeClosureStartTime = 0;
+                eyeStatus = "Open";
+            }
+            wasEyesClosed = eyesClosed;
+
+            // Clean old blinks
+            blinkHistory = blinkHistory.filter(t => (now - t) <= BLINK_WINDOW_MS);
+            const recentBlinkCount = blinkHistory.length;
+
+            // --- 3. Hand & Context Inference ---
             let handCentroids = [];
             if (handData && handData.multiHandLandmarks) {
                 handData.multiHandLandmarks.forEach(hand => {
@@ -557,40 +729,11 @@
                 handsDistance = Math.sqrt(dx*dx + dy*dy);
             }
 
-            // Step 2: Identify Face and Gaze context (Task 3)
-            let faceMeshFound = false;
-            let chinY = 0.5;
-            let newGaze = "No Face";
-            
-            if (faceData && faceData.multiFaceLandmarks && faceData.multiFaceLandmarks.length > 0) {
-                faceMeshFound = true;
-                const landmarks = faceData.multiFaceLandmarks[0];
-                chinY = landmarks[152].y; // bottom of chin
-                
-                const yawRatio = (landmarks[1].x - landmarks[234].x) / (landmarks[454].x - landmarks[234].x);
-                const pitchRatio = (landmarks[1].y - landmarks[10].y) / (landmarks[152].y - landmarks[10].y);
-
-                if (pitchRatio > 0.60) newGaze = "Down";
-                else if (yawRatio < 0.40) newGaze = "Right"; 
-                else if (yawRatio > 0.60) newGaze = "Left";  
-                else newGaze = "Forward";
-
-                drawFaceAndGaze(landmarks, yawRatio, pitchRatio);
-            }
-
-            if (newGaze !== currentGaze) {
-                currentGaze = newGaze;
-                gazeStartTime = now;
-            }
-            const gazeDuration = now - gazeStartTime;
-
-            // Step 3: Object Detection with Multi-Signal Filtering (Tasks 1B & 2)
+            // --- 4. Object Detection (Phone/Eating) ---
             const targetClasses = ['cell phone', 'person', 'cup', 'bottle', 'sandwich', 'apple'];
             let eatingOrDrinking = false;
-            
             let clearPhoneDetected = false;
             let occludedPhoneDetected = false;
-            
             let dbgPhoneConf = 0;
 
             objects.forEach(obj => {
@@ -601,27 +744,18 @@
                 obj.displayClass = obj.class;
 
                 if (obj.class === 'cell phone') {
-                    const bbox = obj.bbox; // [x, y, w, h]
-                    const w = bbox[2];
-                    const h = bbox[3];
-                    const ratio = h / w;
+                    const bbox = obj.bbox;
+                    const ratio = bbox[3] / bbox[2];
                     
-                    // Task 2: Aspect ratio and bulkiness filtering rules
                     let isPhoneShape = (ratio > 1.2 && ratio < 3.5) || (ratio < 0.8 && ratio > 0.25); 
-                    let isBulky = (w > video.videoWidth * 0.35) || (h > video.videoHeight * 0.35); // Rejects wallets/banks
+                    let isBulky = (bbox[2] > video.videoWidth * 0.35) || (bbox[3] > video.videoHeight * 0.35); 
                     
                     let overlapsHand = false;
                     handCentroids.forEach(c => {
-                        const hx = c.x * video.videoWidth;
-                        const hy = c.y * video.videoHeight;
-                        const pad = 60; // Bounding box padding to catch hands holding edges
-                        if (hx > bbox[0] - pad && hx < bbox[0] + w + pad &&
-                            hy > bbox[1] - pad && hy < bbox[1] + h + pad) {
-                            overlapsHand = true;
-                        }
+                        const hx = c.x * video.videoWidth, hy = c.y * video.videoHeight;
+                        if (hx > bbox[0]-60 && hx < bbox[0]+bbox[2]+60 && hy > bbox[1]-60 && hy < bbox[1]+bbox[3]+60) overlapsHand = true;
                     });
 
-                    // Scoring system to reject false positives
                     let validationScore = 0;
                     if (obj.score > 0.25) validationScore++;
                     if (isPhoneShape && !isBulky) validationScore++;
@@ -629,163 +763,135 @@
 
                     if (validationScore >= 2) {
                         if (obj.score >= 0.5) {
-                            clearPhoneDetected = true;
-                            dbgPhoneConf = obj.score;
-                            clearPhoneTime = now;
-                            isDanger = true;
-                            obj.displayClass = "Phone Detected";
+                            clearPhoneDetected = true; dbgPhoneConf = obj.score; clearPhoneTime = now;
+                            isDanger = true; obj.displayClass = "Phone Detected";
                         } else {
-                            // Task 1B: Weak detection boost if rules match
-                            occludedPhoneDetected = true;
-                            dbgPhoneConf = obj.score;
-                            isDanger = true;
-                            isOccluded = true;
-                            obj.displayClass = "Phone Likely (Occluded)";
+                            occludedPhoneDetected = true; dbgPhoneConf = obj.score;
+                            isDanger = true; isOccluded = true; obj.displayClass = "Phone Likely (Occluded)";
                         }
                     } else {
-                        // Task 2 Fallback
-                        obj.displayClass = "Unknown handheld object";
+                        obj.displayClass = "Unknown handheld";
                     }
                 }
                 
                 if (['cup', 'bottle', 'sandwich', 'apple'].includes(obj.class)) eatingOrDrinking = true;
-                
                 drawObjectBox(obj, isDanger, isOccluded);
             });
 
-            // Step 4: Hand Occlusion Heuristic - Texting without visible phone (Task 1A)
             let textingBehavior = false;
             let suspiciousActivity = false;
 
             if (!clearPhoneDetected && handCentroids.length === 2) {
-                if (handsDistance < 0.25) { // Hands are clustered
-                    const avgY = (handCentroids[0].y + handCentroids[1].y) / 2;
-                    if (avgY > chinY) { // Positioned in lower face/lap
-                        if (newGaze !== "Forward") { // Driver is not looking at the road
-                            textingBehavior = true;
-                            suspiciousActivity = true;
-                        }
-                    }
+                if (handsDistance < 0.25 && ((handCentroids[0].y + handCentroids[1].y)/2) > chinY) { 
+                    if (newGaze !== "Forward") { textingBehavior = true; suspiciousActivity = true; }
                 }
             }
-
             if (occludedPhoneDetected) suspiciousActivity = true;
 
-            // Step 5: Temporal Confirmation (Task 1C)
             let currentActivity = "Driving Normally";
-            let dbgClass = "None";
-
-            if (suspiciousActivity) {
-                if (suspectStartTime === 0) suspectStartTime = now;
-            } else {
-                suspectStartTime = 0;
-            }
+            if (suspiciousActivity) { if (suspectStartTime === 0) suspectStartTime = now; } 
+            else { suspectStartTime = 0; }
 
             finalPhoneStatus = false;
-            
-            if (clearPhoneDetected || (now - clearPhoneTime) < PHONE_PERSISTENCE_MS) {
-                finalPhoneStatus = true;
-                currentActivity = "Phone Detected";
-                dbgClass = "Clear Phone";
-                suspectStartTime = 0; 
-            } 
-            else if (suspiciousActivity) {
-                const duration = now - suspectStartTime;
-                if (duration > TEXTING_CONFIRMATION_MS) {
-                    finalPhoneStatus = true;
-                    currentActivity = textingBehavior ? "Texting Behavior Detected" : "Phone Likely (Occluded)";
-                    dbgClass = "Confirmed Occluded/Texting";
+            if (clearPhoneDetected || (now - clearPhoneTime) < 2000) {
+                finalPhoneStatus = true; currentActivity = "Phone Detected"; suspectStartTime = 0; 
+            } else if (suspiciousActivity) {
+                if (now - suspectStartTime > 1500) {
+                    finalPhoneStatus = true; currentActivity = textingBehavior ? "Texting Behavior Detected" : "Phone Likely (Occluded)";
                 } else {
                     currentActivity = "Suspicious Hand Placement";
-                    dbgClass = `Evaluating (${duration}ms)`;
                 }
-            }
-            else if (eatingOrDrinking) {
+            } else if (eatingOrDrinking) {
                 currentActivity = "Eating/Drinking";
-                dbgClass = "Consuming";
             }
 
-            // Draw Hands & Highlight inferred locations (Task 7)
+            // Draw Hands
             if (handData && handData.multiHandLandmarks) {
-                ctx.save();
-                ctx.translate(canvas.width, 0);
-                ctx.scale(-1, 1);
+                ctx.save(); ctx.translate(canvas.width, 0); ctx.scale(-1, 1);
                 handData.multiHandLandmarks.forEach(landmarks => {
                     drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: 'rgba(234, 179, 8, 0.7)', lineWidth: 2});
                     for(let lm of landmarks) {
-                        ctx.beginPath(); ctx.arc(lm.x * canvas.width, lm.y * canvas.height, 3, 0, 2*Math.PI);
-                        ctx.fillStyle = '#ffffff'; ctx.fill();
+                        ctx.beginPath(); ctx.arc(lm.x*canvas.width, lm.y*canvas.height, 3, 0, 2*Math.PI); ctx.fillStyle = '#fff'; ctx.fill();
                     }
                 });
-
                 if (textingBehavior || occludedPhoneDetected) {
-                    // Highlight area between clustered hands
                     if (handCentroids.length === 2) {
-                        const hx1 = handCentroids[0].x * canvas.width;
-                        const hy1 = handCentroids[0].y * canvas.height;
-                        const hx2 = handCentroids[1].x * canvas.width;
-                        const hy2 = handCentroids[1].y * canvas.height;
-                        
-                        ctx.beginPath();
-                        ctx.moveTo(hx1, hy1);
-                        ctx.lineTo(hx2, hy2);
-                        ctx.strokeStyle = 'rgba(239, 68, 68, 0.6)';
-                        ctx.lineWidth = 4;
-                        ctx.setLineDash([5, 5]);
-                        ctx.stroke();
-                        ctx.setLineDash([]);
-
-                        const midX = (hx1 + hx2) / 2;
-                        const midY = (hy1 + hy2) / 2;
-                        ctx.strokeStyle = '#ef4444';
-                        ctx.strokeRect(midX - 40, midY - 60, 80, 120);
-                        ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
-                        ctx.fillRect(midX - 40, midY - 60, 80, 120);
+                        const midX = (handCentroids[0].x + handCentroids[1].x)/2 * canvas.width;
+                        const midY = (handCentroids[0].y + handCentroids[1].y)/2 * canvas.height;
+                        ctx.strokeStyle = '#ef4444'; ctx.strokeRect(midX - 40, midY - 60, 80, 120);
+                        ctx.fillStyle = 'rgba(239, 68, 68, 0.2)'; ctx.fillRect(midX - 40, midY - 60, 80, 120);
                     }
                 }
                 ctx.restore();
             }
 
-            // Speed Simulation
-            if (isRunning) {
-                if (Math.random() < 0.05) targetSpeed = 35 + Math.random() * 35; 
-                simulatedSpeed += (targetSpeed - simulatedSpeed) * 0.02; 
-                speedDisplay.innerText = `${Math.round(simulatedSpeed)} MPH`;
-            }
-
-            // Step 6: Attention Score System Penalties
-            if (finalPhoneStatus && !hadPhoneLastFrame) {
-                attentionScore -= 30; // Instant drop
-                logMsg(`HIGH RISK: ${currentActivity.toUpperCase()} - PENALTY -30`, true);
-            }
+            // --- 5. Scoring Algorithms (Tasks 4 & 5) ---
+            
+            // A. Attention (Distraction) Score Updates
+            if (finalPhoneStatus && !hadPhoneLastFrame) attentionScore -= 30; 
             hadPhoneLastFrame = finalPhoneStatus;
 
             if (currentGaze === "Left" || currentGaze === "Right") attentionScore -= (10 * dtSec);
             if (currentGaze === "Down") attentionScore -= (15 * dtSec);
             if (eatingOrDrinking) attentionScore -= (5 * dtSec);
-
-            // Task 3: Combine Gaze + Suspicious Hands for compounding penalties
-            if (suspiciousActivity && currentGaze !== "Forward") {
-                attentionScore -= (20 * dtSec); 
-            }
+            if (suspiciousActivity && currentGaze !== "Forward") attentionScore -= (20 * dtSec); 
 
             if (currentGaze === "Forward" && !finalPhoneStatus && !eatingOrDrinking && !suspiciousActivity) {
                 attentionScore += (10 * dtSec);
             }
+
+            // B. Alertness (Drowsiness) Score Updates
+            if (currentEyeClosureDuration > 2500) alertnessScore -= (50 * dtSec); // Critical sleep
+            else if (currentEyeClosureDuration > 1000) alertnessScore -= (25 * dtSec); // Microsleep warning
+            
+            if (headPitchRatio > 0.68) alertnessScore -= (15 * dtSec); // Head nodding/drooping
+            
+            // Rapid blinking penalty (e.g., > 15 blinks in 30s is very high)
+            if (recentBlinkCount > 15) alertnessScore -= (5 * dtSec); 
+            
+            // Recovery
+            if (!eyesClosed && currentGaze === "Forward" && headPitchRatio < 0.60) {
+                alertnessScore += (5 * dtSec); // Slow recovery compared to attention
+            }
+
+            // Clamp both
             attentionScore = Math.max(0, Math.min(100, attentionScore));
+            alertnessScore = Math.max(0, Math.min(100, alertnessScore));
 
-            // Determine Alert Status
+            // Map Alertness to Fatigue State
+            if (alertnessScore >= 80) fatigueLevel = "Alert";
+            else if (alertnessScore >= 50) fatigueLevel = "Mild Fatigue";
+            else if (alertnessScore >= 20) fatigueLevel = "Drowsy";
+            else fatigueLevel = "Critical Sleep Risk";
+
+            // --- 6. Master Alert Resolution (Task 7) ---
             let status = "SAFE";
-            let reason = "FOCUSED";
+            let reason = "FOCUSED & ALERT";
+            let triggerAudio = false;
+            let audioCritical = false;
 
-            if (finalPhoneStatus) {
+            // Drowsiness takes absolute priority if critical
+            if (currentEyeClosureDuration > 2500 || fatigueLevel === "Critical Sleep Risk") {
+                status = "DANGER"; reason = "WAKE UP! CRITICAL FATIGUE DETECTED";
+                triggerAudio = true; audioCritical = true;
+                drawAlertOverlay('#ef4444'); 
+            }
+            else if (currentEyeClosureDuration > 1000 || fatigueLevel === "Drowsy") {
+                status = "WARNING"; reason = "FATIGUE WARNING: DROWSINESS DETECTED";
+                triggerAudio = true; audioCritical = false;
+                drawAlertOverlay('#eab308'); // Yellow tint
+            }
+            // Fall back to Distraction checks
+            else if (finalPhoneStatus) {
                 status = "DISTRACTED"; reason = "HIGH RISK: " + currentActivity.toUpperCase();
-                drawAlertOverlay();
+                triggerAudio = true; audioCritical = true;
+                drawAlertOverlay('#ef4444');
             } else if (currentActivity === "Suspicious Hand Placement") {
                 status = "WARNING"; reason = "MEDIUM RISK: SUSPICIOUS HANDS";
             } else if ((currentGaze === "Left" || currentGaze === "Right" || currentGaze === "Down") && gazeDuration > 2000) {
                 status = "DISTRACTED"; reason = "ATTENTION OFF ROAD";
-                drawAlertOverlay();
+                triggerAudio = true; audioCritical = false;
+                drawAlertOverlay('#ef4444');
             } else if (!faceMeshFound) {
                 status = "WARNING"; reason = "FACE NOT VISIBLE";
             } else if (eatingOrDrinking && currentGaze !== "Forward") {
@@ -796,98 +902,86 @@
                 status = "WARNING"; reason = "GAZE DIVERTED";
             }
 
+            if (triggerAudio) playBeep(audioCritical);
+
+            // Speed Simulation
+            if (isRunning) {
+                if (Math.random() < 0.05) targetSpeed = 35 + Math.random() * 35; 
+                simulatedSpeed += (targetSpeed - simulatedSpeed) * 0.02; 
+                speedDisplay.innerText = `${Math.round(simulatedSpeed)} MPH`;
+            }
+
             // Debug Panel updates
             debugText.innerHTML = `
+                <span class="label">EAR:</span> ${currentEAR.toFixed(3)} <br>
+                <span class="label">Pitch:</span> ${headPitchRatio.toFixed(2)} <br>
                 <span class="label">Phone Conf:</span> ${(dbgPhoneConf*100).toFixed(0)}% <br>
-                <span class="label">Hand Dist:</span> ${handsDistance > 0 ? handsDistance.toFixed(2) : "N/A"} <br>
-                <span class="label">Occluded Flag:</span> <span style="color:${suspiciousActivity?'#ef4444':'#10b981'}">${suspiciousActivity}</span> <br>
-                <span class="label">Heuristic:</span> ${dbgClass} <br>
-                <span class="label">Perf FPS:</span> ${(1/dtSec).toFixed(1)}
+                <span class="label">FPS:</span> ${(1/dtSec).toFixed(1)}
             `;
 
-            updateUI(status, reason, currentGaze, currentActivity);
+            updateUI(status, reason, currentGaze, currentActivity, recentBlinkCount);
         }
 
         // --- DRAWING HELPERS ---
         function drawObjectBox(obj, isDanger = false, isOccluded = false) {
-            ctx.lineWidth = 3;
-            ctx.font = 'bold 14px Arial';
-            ctx.textBaseline = 'top';
-
+            ctx.lineWidth = 3; ctx.font = 'bold 14px Arial'; ctx.textBaseline = 'top';
             const flippedX = canvas.width - obj.bbox[0] - obj.bbox[2];
-            const y = obj.bbox[1];
-            const width = obj.bbox[2];
-            const height = obj.bbox[3];
-
+            
             let color = '#3b82f6'; 
             if (isDanger) color = isOccluded ? '#f97316' : '#ef4444';
-            if (obj.displayClass === "Unknown handheld object") color = '#94a3b8'; // Grey for false positives
+            if (obj.displayClass === "Unknown handheld") color = '#94a3b8';
             
-            ctx.strokeStyle = color;
-            ctx.fillStyle = color;
-            
+            ctx.strokeStyle = color; ctx.fillStyle = color;
             if (isOccluded) ctx.setLineDash([5, 5]);
-            ctx.strokeRect(flippedX, y, width, height);
+            ctx.strokeRect(flippedX, obj.bbox[1], obj.bbox[2], obj.bbox[3]);
             ctx.setLineDash([]);
 
             const label = `${obj.displayClass.toUpperCase()} ${Math.round(obj.score * 100)}%`;
-            const textWidth = ctx.measureText(label).width;
-            
-            ctx.fillRect(flippedX, y > 25 ? y - 25 : y, textWidth + 10, 24);
+            ctx.fillRect(flippedX, obj.bbox[1] > 25 ? obj.bbox[1] - 25 : obj.bbox[1], ctx.measureText(label).width + 10, 24);
             ctx.fillStyle = '#ffffff';
-            ctx.fillText(label, flippedX + 5, y > 25 ? y - 20 : y + 5);
+            ctx.fillText(label, flippedX + 5, obj.bbox[1] > 25 ? obj.bbox[1] - 20 : obj.bbox[1] + 5);
         }
 
-        function drawFaceAndGaze(landmarks, yawRatio, pitchRatio) {
+        function drawFaceAndEyes(landmarks, yawRatio, pitchRatio, isClosed) {
             ctx.save();
             ctx.translate(canvas.width, 0);
             ctx.scale(-1, 1);
 
-            drawConnectors(ctx, landmarks, FACEMESH_TESSELATION, {color: 'rgba(34, 197, 94, 0.3)', lineWidth: 1});
-            drawConnectors(ctx, landmarks, FACEMESH_FACE_OVAL, {color: '#22c55e', lineWidth: 1});
+            // Draw full mesh veil lightly
+            drawConnectors(ctx, landmarks, FACEMESH_TESSELATION, {color: 'rgba(34, 197, 94, 0.2)', lineWidth: 1});
             
-            const rightIris = landmarks[468];
-            const leftIris = landmarks[473];
+            // Draw eye contours prominently based on state
+            const eyeColor = isClosed ? '#ef4444' : '#eab308'; // Red if closed, yellow if open
+            drawConnectors(ctx, landmarks, FACEMESH_RIGHT_EYE, {color: eyeColor, lineWidth: 2});
+            drawConnectors(ctx, landmarks, FACEMESH_LEFT_EYE, {color: eyeColor, lineWidth: 2});
             
-            if (rightIris && leftIris) {
-                ctx.fillStyle = '#ef4444'; 
-                ctx.beginPath(); ctx.arc(rightIris.x * canvas.width, rightIris.y * canvas.height, 4, 0, 2*Math.PI); ctx.fill();
-                ctx.beginPath(); ctx.arc(leftIris.x * canvas.width, leftIris.y * canvas.height, 4, 0, 2*Math.PI); ctx.fill();
-            }
-
+            // Gaze Arrow
             const nose = landmarks[1];
-            const nx = nose.x * canvas.width;
-            const ny = nose.y * canvas.height;
+            const nx = nose.x * canvas.width; const ny = nose.y * canvas.height;
             const multiplier = 150;
-            const dx = (yawRatio - 0.5) * multiplier;
-            const dy = (pitchRatio - 0.5) * multiplier;
+            const dx = (yawRatio - 0.5) * multiplier; const dy = (pitchRatio - 0.5) * multiplier;
 
-            ctx.beginPath();
-            ctx.moveTo(nx, ny);
-            ctx.lineTo(nx + dx, ny + dy);
-            ctx.strokeStyle = '#ef4444';
-            ctx.lineWidth = 4;
-            ctx.stroke();
-            
-            ctx.beginPath();
-            ctx.arc(nx + dx, ny + dy, 5, 0, 2*Math.PI);
-            ctx.fillStyle = '#ef4444';
-            ctx.fill();
+            ctx.beginPath(); ctx.moveTo(nx, ny); ctx.lineTo(nx + dx, ny + dy);
+            ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 3; ctx.stroke();
+            ctx.beginPath(); ctx.arc(nx + dx, ny + dy, 4, 0, 2*Math.PI);
+            ctx.fillStyle = '#ef4444'; ctx.fill();
 
             ctx.restore();
         }
 
-        function drawAlertOverlay() {
-            ctx.fillStyle = 'rgba(239, 68, 68, 0.3)';
+        function drawAlertOverlay(hexColor) {
+            // Hex to rgba overlay
+            const r = parseInt(hexColor.slice(1, 3), 16);
+            const g = parseInt(hexColor.slice(3, 5), 16);
+            const b = parseInt(hexColor.slice(5, 7), 16);
+            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.35)`;
             ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
 
         // --- UI UPDATER ---
-        function updateUI(status, reason, gaze, activity) {
+        function updateUI(status, reason, gaze, activity, blinkCount) {
             if (statusDisplay.innerText !== status || statusReason.innerText !== reason) {
-                if(status !== "SAFE" && !reason.includes("MEDIUM RISK: SUSPICIOUS HANDS")) {
-                    logMsg(`${status}: ${reason}`, true);
-                }
+                if(status !== "SAFE" && !reason.includes("MEDIUM RISK")) logMsg(`${status}: ${reason}`, "warning");
             }
 
             statusDisplay.innerText = status;
@@ -896,23 +990,37 @@
             statusDisplay.className = "status-indicator"; 
             if (status === "SAFE") statusDisplay.classList.add("status-safe");
             if (status === "WARNING") statusDisplay.classList.add("status-warning");
-            if (status === "DISTRACTED") statusDisplay.classList.add("status-danger");
+            if (status === "DISTRACTED" || status === "DANGER") statusDisplay.classList.add("status-danger");
 
             gazeDisplay.innerText = gaze;
             gazeDisplay.style.color = gaze === "Forward" ? "var(--safe-color)" : "var(--warning-color)";
             
             activityDisplay.innerText = activity;
             if (activity.includes("Texting") || activity.includes("Phone")) activityDisplay.style.color = "var(--danger-color)";
-            else if (activity === "Suspicious Hand Placement") activityDisplay.style.color = "var(--warning-color)";
+            else if (activity.includes("Suspicious")) activityDisplay.style.color = "var(--warning-color)";
             else activityDisplay.style.color = "white";
 
-            const roundedScore = Math.round(attentionScore);
-            scoreText.innerText = `${roundedScore} / 100`;
-            scoreBar.style.width = `${roundedScore}%`;
+            // Update new eye metrics
+            eyeStatusDisplay.innerText = eyeStatus;
+            eyeStatusDisplay.style.color = eyesClosed ? (currentEyeClosureDuration > 1000 ? "var(--danger-color)" : "var(--warning-color)") : "var(--safe-color)";
             
-            if (roundedScore > 75) scoreBar.style.background = "var(--safe-color)";
-            else if (roundedScore > 40) scoreBar.style.background = "var(--warning-color)";
-            else scoreBar.style.background = "var(--danger-color)";
+            fatigueDisplay.innerText = fatigueLevel;
+            fatigueDisplay.style.color = fatigueLevel === "Alert" ? "var(--safe-color)" : (fatigueLevel.includes("Mild") ? "var(--warning-color)" : "var(--danger-color)");
+            
+            blinkDisplay.innerText = `${blinkCount} / 30s`;
+
+            // Update Dual Score Bars
+            const updateBar = (score, barEl, textEl) => {
+                const rounded = Math.round(score);
+                textEl.innerText = `${rounded} / 100`;
+                barEl.style.width = `${rounded}%`;
+                if (rounded > 75) barEl.style.background = "var(--safe-color)";
+                else if (rounded > 40) barEl.style.background = "var(--warning-color)";
+                else barEl.style.background = "var(--danger-color)";
+            };
+
+            updateBar(attentionScore, attnScoreBar, attnScoreText);
+            updateBar(alertnessScore, drowsyScoreBar, drowsyScoreText);
         }
 
         // Kickoff script
