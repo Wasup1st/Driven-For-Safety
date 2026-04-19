@@ -632,7 +632,7 @@
                     
                     try {
                         // Parallel Inference for speed
-                        const pCoco = cocoModel.detect(video, 20, 0.2);
+                        const pCoco = cocoModel.detect(video, 20, 0.12); // Lowered threshold from 0.2 to catch partially off-screen phones
                         const pFace = faceModel.send({image: video}); 
                         const pHand = handsModel.send({image: video}); 
                         
@@ -783,8 +783,8 @@
                     const dTip16 = Math.hypot(wrist.x - hand[16].x, wrist.y - hand[16].y); // Ring Tip
                     const dMcp13 = Math.hypot(wrist.x - hand[13].x, wrist.y - hand[13].y); // Ring Base
                     
-                    // Multiplier reduced to 1.4 -> Requires tighter curl. Prevents false positive scratching.
-                    if (dTip8 < dMcp5 * 1.4 && dTip12 < dMcp9 * 1.4 && dTip16 < dMcp13 * 1.4) {
+                    // Multiplier adjusted to 1.5 -> Balances between flat hand (scratching) and loose phone grip
+                    if (dTip8 < dMcp5 * 1.5 && dTip12 < dMcp9 * 1.5 && dTip16 < dMcp13 * 1.5) {
                         isHandCurled = true;
                     }
                 });
@@ -812,35 +812,51 @@
                 obj.displayClass = obj.class;
 
                 if (obj.class === 'cell phone') {
+                    dbgPhoneConf = Math.max(dbgPhoneConf, obj.score); // Always track max confidence found
+                    
                     const bbox = obj.bbox;
                     const w = bbox[2];
                     const h = bbox[3];
                     const ratio = h / w;
                     
-                    // SMART FILTERS: Reject watches (too small) and laptops (too big)
+                    // SMART FILTERS for off-screen / partial phones
                     const minDim = Math.min(w, h);
-                    let isTooSmall = minDim < (video.videoWidth * 0.06); 
-                    let isPhoneShape = (ratio > 1.2 && ratio < 3.5) || (ratio < 0.8 && ratio > 0.25); 
-                    let isBulky = (w > video.videoWidth * 0.35) || (h > video.videoHeight * 0.35); 
+                    let isTooSmall = minDim < (video.videoWidth * 0.05); 
+                    
+                    // Check if phone is cut off by the bottom/side edges
+                    let isAtEdge = (bbox[1] + h) > (video.videoHeight * 0.85) || bbox[0] < (video.videoWidth * 0.05) || (bbox[0] + w) > (video.videoWidth * 0.95);
+                    
+                    // If cut off by edge, standard aspect ratios fail, so we bypass the strict shape check
+                    let isPhoneShape = (ratio > 1.1 && ratio < 3.5) || (ratio < 0.9 && ratio > 0.25); 
+                    if (isAtEdge) isPhoneShape = true; 
+                    
+                    // Relaxed bulky check: Allow up to 50% of the screen size (for phones held close to the camera)
+                    let isBulky = (w > video.videoWidth * 0.5) || (h > video.videoHeight * 0.5); 
                     
                     let overlapsHand = false;
                     handCentroids.forEach(c => {
                         const hx = c.x * video.videoWidth, hy = c.y * video.videoHeight;
-                        if (hx > bbox[0]-60 && hx < bbox[0]+w+60 && hy > bbox[1]-60 && hy < bbox[1]+h+60) overlapsHand = true;
+                        // Increased padding to 80 to catch hands near the edge of the box
+                        if (hx > bbox[0]-80 && hx < bbox[0]+w+80 && hy > bbox[1]-80 && hy < bbox[1]+h+80) overlapsHand = true;
                     });
 
                     let validationScore = 0;
                     if (obj.score > 0.25) validationScore++;
+                    if (obj.score > 0.65) validationScore++; // Bonus validation point for strong AI confidence
                     if (isPhoneShape && !isBulky && !isTooSmall) validationScore++;
-                    if (overlapsHand) validationScore++;
+                    if (overlapsHand) validationScore += 2; // Hand overlap is strong proof
+                    if (isAtEdge) validationScore++; // Being at edge explains missing features
 
-                    if (validationScore >= 2 && !isTooSmall) {
-                        if (obj.score >= 0.45) { 
-                            clearPhoneDetected = true; dbgPhoneConf = obj.score; clearPhoneTime = now;
+                    // AI CONFIDENCE OVERRIDE: If the model is >70% sure, bypass strict heuristic filters
+                    let isHighlyConfident = (obj.score >= 0.70);
+
+                    if ((validationScore >= 2 || isHighlyConfident) && !isTooSmall) {
+                        if (obj.score >= 0.45 || isHighlyConfident) { 
+                            clearPhoneDetected = true; clearPhoneTime = now;
                             isDanger = true; obj.displayClass = "Phone Detected";
                         } else {
-                            occludedPhoneDetected = true; dbgPhoneConf = obj.score;
-                            isDanger = true; isOccluded = true; obj.displayClass = "Phone Likely (Occluded)";
+                            occludedPhoneDetected = true;
+                            isDanger = true; isOccluded = true; obj.displayClass = "Phone Likely (Partial)";
                         }
                     } else {
                         if (isTooSmall) obj.displayClass = "Ignored (Watch)";
