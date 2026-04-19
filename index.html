@@ -415,12 +415,7 @@
         let lastFrameTime = 0;
         const TARGET_FPS = 12; 
         const FPS_INTERVAL = 1000 / TARGET_FPS;
-
-        // Audio Context for Alerts
-        let audioCtx = null;
-        let lastBeepTime = 0;
-
-        // --- DISTRACTION & GAZE VARIABLES ---
+        // --- ADVANCED STATE VARIABLES ---
         let attentionScore = 100;
         let lastLogicUpdate = Date.now();
         let currentGaze = "Forward";
@@ -430,6 +425,11 @@
         let hadPhoneLastFrame = false; 
         let suspectStartTime = 0;
         let clearPhoneTime = 0;
+        
+        // Temporal tracking for heuristic logic 
+        const PHONE_PERSISTENCE_MS = 2000;
+        const TEXTING_CONFIRMATION_MS = 2000; // Increased to 2 seconds
+        const CALLING_CONFIRMATION_MS = 2500; // Require 2.5s to filter out quick scratches
 
         // --- DROWSINESS VARIABLES ---
         let alertnessScore = 100;
@@ -444,11 +444,21 @@
         let blinkHistory = []; // Timestamps of recent blinks
         const BLINK_WINDOW_MS = 30000; // Track blinks over 30 seconds
 
-        const EAR_THRESHOLD = 0.22; // Threshold for eye closure
+        // INCREASED SENSITIVITY: Raised from 0.22 to 0.245 to detect "heavy eyelids" earlier
+        const EAR_THRESHOLD = 0.245; 
+        const MAR_YAWN_THRESHOLD = 0.45; // Threshold for yawn detection
+        
+        let isYawning = false;
+        let yawnStartTime = 0;
+        let currentYawnDuration = 0;
         
         // Mock Speed state
         let simulatedSpeed = 0;
         let targetSpeed = 45;
+
+        // Audio Context for Alerts
+        let audioCtx = null;
+        let lastBeepTime = 0;
 
         // Custom Logger
         function logMsg(msg, type="info") {
@@ -540,28 +550,45 @@
 
         // --- CAMERA PIPELINE ---
         async function setupCamera() {
+            let stream;
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({
+                // Try to get the user-facing camera first
+                stream = await navigator.mediaDevices.getUserMedia({
                     video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false
                 });
-                video.srcObject = stream;
-                return new Promise((resolve) => {
-                    video.onloadedmetadata = () => {
-                        canvas.width = video.videoWidth;
-                        canvas.height = video.videoHeight;
-                        video.play();
-                        resolve();
-                    };
-                });
             } catch (err) {
-                loadingText.innerText = "Camera Permission Denied.";
-                throw err;
+                // Fallback: If 'user' facing mode fails (common on desktops), request any available camera
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        video: true, audio: false
+                    });
+                } catch (fallbackErr) {
+                    loadingText.innerText = "Error: Camera not found or permission denied.";
+                    throw fallbackErr;
+                }
             }
+            
+            video.srcObject = stream;
+            return new Promise((resolve) => {
+                video.onloadedmetadata = () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    video.play();
+                    resolve();
+                };
+            });
         }
 
         async function init() {
-            await setupCamera();
-            await loadModels();
+            try {
+                await setupCamera();
+                await loadModels();
+            } catch (err) {
+                console.error("Initialization Error:", err);
+                loadingText.innerText = "Error: Could not access camera.";
+                loadingText.style.color = "var(--danger-color)";
+                logMsg("Camera/Init Error. Please check permissions and ensure a camera is connected.", "danger");
+            }
         }
 
         btnStart.addEventListener('click', () => {
@@ -643,6 +670,18 @@
             return (earLeft + earRight) / 2.0;
         }
 
+        function calculateMAR(landmarks) {
+            // Mouth Aspect Ratio for Yawn Detection
+            const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
+            
+            // Inner lips vertical distance
+            const mouthV = dist(landmarks[13], landmarks[14]);
+            // Mouth corners horizontal distance
+            const mouthH = dist(landmarks[78], landmarks[308]);
+            
+            return mouthV / mouthH;
+        }
+
         // --- BEHAVIOR LOGIC & DRAWING ---
         function processLogicAndDraw(objects, faceData, handData) {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -657,6 +696,7 @@
             let newGaze = "No Face";
             let headPitchRatio = 0.5;
             let currentEAR = 0.3;
+            let currentMAR = 0.1;
 
             if (faceData && faceData.multiFaceLandmarks && faceData.multiFaceLandmarks.length > 0) {
                 faceMeshFound = true;
@@ -666,8 +706,8 @@
                 const yawRatio = (landmarks[1].x - landmarks[234].x) / (landmarks[454].x - landmarks[234].x);
                 headPitchRatio = (landmarks[1].y - landmarks[10].y) / (landmarks[152].y - landmarks[10].y);
 
-                // Gaze estimation
-                if (headPitchRatio > 0.65) newGaze = "Down";
+                // Gaze estimation (Lowered droop threshold to be more sensitive to nodding off)
+                if (headPitchRatio > 0.63) newGaze = "Down";
                 else if (yawRatio < 0.40) newGaze = "Right"; 
                 else if (yawRatio > 0.60) newGaze = "Left";  
                 else newGaze = "Forward";
@@ -675,8 +715,12 @@
                 // Eye Aspect Ratio (EAR) for Blinks/Closure
                 currentEAR = calculateEAR(landmarks);
                 eyesClosed = currentEAR < EAR_THRESHOLD;
+                
+                // Mouth Aspect Ratio (MAR) for Yawning
+                currentMAR = calculateMAR(landmarks);
+                isYawning = currentMAR > MAR_YAWN_THRESHOLD;
 
-                drawFaceAndEyes(landmarks, yawRatio, headPitchRatio, eyesClosed);
+                drawFaceAndEyes(landmarks, yawRatio, headPitchRatio, eyesClosed, isYawning);
             }
 
             // Gaze timer
@@ -691,14 +735,15 @@
                 if (!wasEyesClosed) eyeClosureStartTime = now;
                 currentEyeClosureDuration = now - eyeClosureStartTime;
                 
-                if (currentEyeClosureDuration > 2500) eyeStatus = "Critical Closure";
-                else if (currentEyeClosureDuration > 1000) eyeStatus = "Slow Blink / Microsleep";
+                // MORE SENSITIVE TIME THRESHOLDS
+                if (currentEyeClosureDuration > 1500) eyeStatus = "Critical Closure"; // Was 2.5s, now 1.5s
+                else if (currentEyeClosureDuration > 600) eyeStatus = "Slow Blink / Microsleep"; // Was 1.0s, now 0.6s
                 else eyeStatus = "Closed";
             } else {
                 if (wasEyesClosed) {
                     // Blink ended
                     const duration = now - eyeClosureStartTime;
-                    if (duration > 50 && duration < 1000) {
+                    if (duration > 50 && duration < 600) {
                         blinkHistory.push(now); // Record standard blink
                     }
                 }
@@ -707,6 +752,15 @@
                 eyeStatus = "Open";
             }
             wasEyesClosed = eyesClosed;
+            
+            // Yawn Tracking
+            if (isYawning) {
+                if (yawnStartTime === 0) yawnStartTime = now;
+                currentYawnDuration = now - yawnStartTime;
+            } else {
+                yawnStartTime = 0;
+                currentYawnDuration = 0;
+            }
 
             // Clean old blinks
             blinkHistory = blinkHistory.filter(t => (now - t) <= BLINK_WINDOW_MS);
@@ -714,11 +768,24 @@
 
             // --- 3. Hand & Context Inference ---
             let handCentroids = [];
+            let isHandCurled = false; // Track if hand is holding something
             if (handData && handData.multiHandLandmarks) {
                 handData.multiHandLandmarks.forEach(hand => {
                     let cx = 0, cy = 0;
                     hand.forEach(lm => { cx += lm.x; cy += lm.y; });
                     handCentroids.push({ x: cx / hand.length, y: cy / hand.length });
+                    
+                    // Check if hand is curled (holding an object vs flat open hand for scratching)
+                    const wrist = hand[0];
+                    const dTip8 = Math.hypot(wrist.x - hand[8].x, wrist.y - hand[8].y); // Index Tip
+                    const dMcp5 = Math.hypot(wrist.x - hand[5].x, wrist.y - hand[5].y); // Index Base
+                    const dTip12 = Math.hypot(wrist.x - hand[12].x, wrist.y - hand[12].y); // Middle Tip
+                    const dMcp9 = Math.hypot(wrist.x - hand[9].x, wrist.y - hand[9].y); // Middle Base
+                    
+                    // If fingertips are close to the base relative to the wrist, it's curled into a grip
+                    if (dTip8 < dMcp5 * 1.6 && dTip12 < dMcp9 * 1.6) {
+                        isHandCurled = true;
+                    }
                 });
             }
 
@@ -745,24 +812,29 @@
 
                 if (obj.class === 'cell phone') {
                     const bbox = obj.bbox;
-                    const ratio = bbox[3] / bbox[2];
+                    const w = bbox[2];
+                    const h = bbox[3];
+                    const ratio = h / w;
                     
+                    // SMART FILTERS: Reject watches (too small) and laptops (too big)
+                    const minDim = Math.min(w, h);
+                    let isTooSmall = minDim < (video.videoWidth * 0.06); // Approx 38px, rejects watches
                     let isPhoneShape = (ratio > 1.2 && ratio < 3.5) || (ratio < 0.8 && ratio > 0.25); 
-                    let isBulky = (bbox[2] > video.videoWidth * 0.35) || (bbox[3] > video.videoHeight * 0.35); 
+                    let isBulky = (w > video.videoWidth * 0.35) || (h > video.videoHeight * 0.35); 
                     
                     let overlapsHand = false;
                     handCentroids.forEach(c => {
                         const hx = c.x * video.videoWidth, hy = c.y * video.videoHeight;
-                        if (hx > bbox[0]-60 && hx < bbox[0]+bbox[2]+60 && hy > bbox[1]-60 && hy < bbox[1]+bbox[3]+60) overlapsHand = true;
+                        if (hx > bbox[0]-60 && hx < bbox[0]+w+60 && hy > bbox[1]-60 && hy < bbox[1]+h+60) overlapsHand = true;
                     });
 
                     let validationScore = 0;
                     if (obj.score > 0.25) validationScore++;
-                    if (isPhoneShape && !isBulky) validationScore++;
+                    if (isPhoneShape && !isBulky && !isTooSmall) validationScore++;
                     if (overlapsHand) validationScore++;
 
-                    if (validationScore >= 2) {
-                        if (obj.score >= 0.5) {
+                    if (validationScore >= 2 && !isTooSmall) {
+                        if (obj.score >= 0.45) { // Lowered slightly to catch non-black phones better if shape matches
                             clearPhoneDetected = true; dbgPhoneConf = obj.score; clearPhoneTime = now;
                             isDanger = true; obj.displayClass = "Phone Detected";
                         } else {
@@ -770,7 +842,8 @@
                             isDanger = true; isOccluded = true; obj.displayClass = "Phone Likely (Occluded)";
                         }
                     } else {
-                        obj.displayClass = "Unknown handheld";
+                        if (isTooSmall) obj.displayClass = "Ignored (Watch)";
+                        else obj.displayClass = "Unknown handheld";
                     }
                 }
                 
@@ -779,13 +852,32 @@
             });
 
             let textingBehavior = false;
+            let callingBehavior = false;
             let suspiciousActivity = false;
 
+            // TEXTING HEURISTIC
             if (!clearPhoneDetected && handCentroids.length === 2) {
                 if (handsDistance < 0.25 && ((handCentroids[0].y + handCentroids[1].y)/2) > chinY) { 
                     if (newGaze !== "Forward") { textingBehavior = true; suspiciousActivity = true; }
                 }
             }
+            
+            // CALLING HEURISTIC (Hand near ear/cheek)
+            if (!clearPhoneDetected && handCentroids.length >= 1 && faceMeshFound) {
+                const leftCheek = faceData.multiFaceLandmarks[0][234];
+                const rightCheek = faceData.multiFaceLandmarks[0][454];
+                
+                handCentroids.forEach(c => {
+                    const distL = Math.hypot(c.x - leftCheek.x, c.y - leftCheek.y);
+                    const distR = Math.hypot(c.x - rightCheek.x, c.y - rightCheek.y);
+                    // Require the hand to be curled into a grip to trigger calling behavior (filters out scratching)
+                    if ((distL < 0.15 || distR < 0.15) && isHandCurled) { 
+                        callingBehavior = true; 
+                        suspiciousActivity = true;
+                    }
+                });
+            }
+
             if (occludedPhoneDetected) suspiciousActivity = true;
 
             let currentActivity = "Driving Normally";
@@ -796,8 +888,12 @@
             if (clearPhoneDetected || (now - clearPhoneTime) < 2000) {
                 finalPhoneStatus = true; currentActivity = "Phone Detected"; suspectStartTime = 0; 
             } else if (suspiciousActivity) {
-                if (now - suspectStartTime > 1500) {
-                    finalPhoneStatus = true; currentActivity = textingBehavior ? "Texting Behavior Detected" : "Phone Likely (Occluded)";
+                const requiredTime = callingBehavior ? CALLING_CONFIRMATION_MS : TEXTING_CONFIRMATION_MS;
+                if (now - suspectStartTime > requiredTime) {
+                    finalPhoneStatus = true; 
+                    if (callingBehavior) currentActivity = "Calling Behavior Detected";
+                    else if (textingBehavior) currentActivity = "Texting Behavior Detected";
+                    else currentActivity = "Phone Likely (Occluded)";
                 } else {
                     currentActivity = "Suspicious Hand Placement";
                 }
@@ -814,12 +910,18 @@
                         ctx.beginPath(); ctx.arc(lm.x*canvas.width, lm.y*canvas.height, 3, 0, 2*Math.PI); ctx.fillStyle = '#fff'; ctx.fill();
                     }
                 });
-                if (textingBehavior || occludedPhoneDetected) {
-                    if (handCentroids.length === 2) {
+                if (textingBehavior || callingBehavior || occludedPhoneDetected) {
+                    if (handCentroids.length === 2 && textingBehavior) {
                         const midX = (handCentroids[0].x + handCentroids[1].x)/2 * canvas.width;
                         const midY = (handCentroids[0].y + handCentroids[1].y)/2 * canvas.height;
                         ctx.strokeStyle = '#ef4444'; ctx.strokeRect(midX - 40, midY - 60, 80, 120);
                         ctx.fillStyle = 'rgba(239, 68, 68, 0.2)'; ctx.fillRect(midX - 40, midY - 60, 80, 120);
+                    } else if (callingBehavior && handCentroids.length >= 1) {
+                        // Highlight the hand near the ear
+                        const hx = handCentroids[0].x * canvas.width;
+                        const hy = handCentroids[0].y * canvas.height;
+                        ctx.strokeStyle = '#ef4444'; ctx.strokeRect(hx - 50, hy - 70, 100, 140);
+                        ctx.fillStyle = 'rgba(239, 68, 68, 0.2)'; ctx.fillRect(hx - 50, hy - 70, 100, 140);
                     }
                 }
                 ctx.restore();
@@ -841,16 +943,17 @@
             }
 
             // B. Alertness (Drowsiness) Score Updates
-            if (currentEyeClosureDuration > 2500) alertnessScore -= (50 * dtSec); // Critical sleep
-            else if (currentEyeClosureDuration > 1000) alertnessScore -= (25 * dtSec); // Microsleep warning
+            if (currentEyeClosureDuration > 1500) alertnessScore -= (60 * dtSec); // Critical sleep (FASTER DRAIN)
+            else if (currentEyeClosureDuration > 600) alertnessScore -= (30 * dtSec); // Microsleep warning
             
-            if (headPitchRatio > 0.68) alertnessScore -= (15 * dtSec); // Head nodding/drooping
+            if (headPitchRatio > 0.64) alertnessScore -= (20 * dtSec); // Head nodding/drooping
+            if (currentYawnDuration > 1000) alertnessScore -= (15 * dtSec); // Persistent yawning penalty
             
             // Rapid blinking penalty (e.g., > 15 blinks in 30s is very high)
             if (recentBlinkCount > 15) alertnessScore -= (5 * dtSec); 
             
             // Recovery
-            if (!eyesClosed && currentGaze === "Forward" && headPitchRatio < 0.60) {
+            if (!eyesClosed && currentGaze === "Forward" && headPitchRatio < 0.60 && !isYawning) {
                 alertnessScore += (5 * dtSec); // Slow recovery compared to attention
             }
 
@@ -871,15 +974,19 @@
             let audioCritical = false;
 
             // Drowsiness takes absolute priority if critical
-            if (currentEyeClosureDuration > 2500 || fatigueLevel === "Critical Sleep Risk") {
+            if (currentEyeClosureDuration > 1500 || fatigueLevel === "Critical Sleep Risk") {
                 status = "DANGER"; reason = "WAKE UP! CRITICAL FATIGUE DETECTED";
                 triggerAudio = true; audioCritical = true;
                 drawAlertOverlay('#ef4444'); 
             }
-            else if (currentEyeClosureDuration > 1000 || fatigueLevel === "Drowsy") {
-                status = "WARNING"; reason = "FATIGUE WARNING: DROWSINESS DETECTED";
+            else if (currentEyeClosureDuration > 600 || fatigueLevel === "Drowsy") {
+                status = "WARNING"; reason = "FATIGUE WARNING: MICROSLEEP DETECTED";
                 triggerAudio = true; audioCritical = false;
                 drawAlertOverlay('#eab308'); // Yellow tint
+            }
+            else if (currentYawnDuration > 1500) {
+                status = "WARNING"; reason = "DROWSINESS SIGNS: YAWNING DETECTED";
+                triggerAudio = false; 
             }
             // Fall back to Distraction checks
             else if (finalPhoneStatus) {
@@ -914,6 +1021,7 @@
             // Debug Panel updates
             debugText.innerHTML = `
                 <span class="label">EAR:</span> ${currentEAR.toFixed(3)} <br>
+                <span class="label">MAR:</span> ${currentMAR.toFixed(3)} <br>
                 <span class="label">Pitch:</span> ${headPitchRatio.toFixed(2)} <br>
                 <span class="label">Phone Conf:</span> ${(dbgPhoneConf*100).toFixed(0)}% <br>
                 <span class="label">FPS:</span> ${(1/dtSec).toFixed(1)}
@@ -929,7 +1037,7 @@
             
             let color = '#3b82f6'; 
             if (isDanger) color = isOccluded ? '#f97316' : '#ef4444';
-            if (obj.displayClass === "Unknown handheld") color = '#94a3b8';
+            if (obj.displayClass.includes("Unknown") || obj.displayClass.includes("Ignored")) color = '#94a3b8';
             
             ctx.strokeStyle = color; ctx.fillStyle = color;
             if (isOccluded) ctx.setLineDash([5, 5]);
@@ -942,7 +1050,7 @@
             ctx.fillText(label, flippedX + 5, obj.bbox[1] > 25 ? obj.bbox[1] - 20 : obj.bbox[1] + 5);
         }
 
-        function drawFaceAndEyes(landmarks, yawRatio, pitchRatio, isClosed) {
+        function drawFaceAndEyes(landmarks, yawRatio, pitchRatio, isClosed, isYawn) {
             ctx.save();
             ctx.translate(canvas.width, 0);
             ctx.scale(-1, 1);
@@ -954,6 +1062,11 @@
             const eyeColor = isClosed ? '#ef4444' : '#eab308'; // Red if closed, yellow if open
             drawConnectors(ctx, landmarks, FACEMESH_RIGHT_EYE, {color: eyeColor, lineWidth: 2});
             drawConnectors(ctx, landmarks, FACEMESH_LEFT_EYE, {color: eyeColor, lineWidth: 2});
+            
+            // Draw mouth contour prominently if yawning
+            if (isYawn) {
+                drawConnectors(ctx, landmarks, FACEMESH_LIPS, {color: '#ef4444', lineWidth: 2});
+            }
             
             // Gaze Arrow
             const nose = landmarks[1];
