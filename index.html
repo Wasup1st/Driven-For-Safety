@@ -428,8 +428,8 @@
         
         // Temporal tracking for heuristic logic 
         const PHONE_PERSISTENCE_MS = 2000;
-        const TEXTING_CONFIRMATION_MS = 2000; // Increased to 2 seconds
-        const CALLING_CONFIRMATION_MS = 2500; // Require 2.5s to filter out quick scratches
+        const TEXTING_CONFIRMATION_MS = 2000; 
+        const CALLING_CONFIRMATION_MS = 3500; // Increased to 3.5s to filter out face-touching
 
         // --- DROWSINESS VARIABLES ---
         let alertnessScore = 100;
@@ -444,14 +444,13 @@
         let blinkHistory = []; // Timestamps of recent blinks
         const BLINK_WINDOW_MS = 30000; // Track blinks over 30 seconds
 
-        // INCREASED SENSITIVITY: Raised from 0.22 to 0.245 to detect "heavy eyelids" earlier
-        const EAR_THRESHOLD = 0.245; 
-        const MAR_YAWN_THRESHOLD = 0.45; // Threshold for yawn detection
+        const EAR_THRESHOLD = 0.245; // Increased to catch "heavy eyelids" earlier
+        const MAR_YAWN_THRESHOLD = 0.45; 
         
         let isYawning = false;
         let yawnStartTime = 0;
         let currentYawnDuration = 0;
-        
+
         // Mock Speed state
         let simulatedSpeed = 0;
         let targetSpeed = 45;
@@ -615,7 +614,7 @@
                 btnStart.style.backgroundColor = "#2563eb";
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 simulatedSpeed = 0;
-                updateUI("SAFE", "System Stopped", "Forward", "Idle");
+                updateUI("SAFE", "System Stopped", "Forward", "Idle", 0);
             }
         });
 
@@ -736,14 +735,14 @@
                 currentEyeClosureDuration = now - eyeClosureStartTime;
                 
                 // MORE SENSITIVE TIME THRESHOLDS
-                if (currentEyeClosureDuration > 1500) eyeStatus = "Critical Closure"; // Was 2.5s, now 1.5s
-                else if (currentEyeClosureDuration > 600) eyeStatus = "Slow Blink / Microsleep"; // Was 1.0s, now 0.6s
+                if (currentEyeClosureDuration > 2500) eyeStatus = "Critical Closure"; 
+                else if (currentEyeClosureDuration > 1100) eyeStatus = "Slow Blink / Microsleep"; // Raised to 1.1s to reduce false positive blinks
                 else eyeStatus = "Closed";
             } else {
                 if (wasEyesClosed) {
                     // Blink ended
                     const duration = now - eyeClosureStartTime;
-                    if (duration > 50 && duration < 600) {
+                    if (duration > 50 && duration < 1100) {
                         blinkHistory.push(now); // Record standard blink
                     }
                 }
@@ -775,15 +774,17 @@
                     hand.forEach(lm => { cx += lm.x; cy += lm.y; });
                     handCentroids.push({ x: cx / hand.length, y: cy / hand.length });
                     
-                    // Check if hand is curled (holding an object vs flat open hand for scratching)
+                    // STRICTER Hand Curl check (Index, Middle, and Ring fingers must be curled inward)
                     const wrist = hand[0];
                     const dTip8 = Math.hypot(wrist.x - hand[8].x, wrist.y - hand[8].y); // Index Tip
                     const dMcp5 = Math.hypot(wrist.x - hand[5].x, wrist.y - hand[5].y); // Index Base
                     const dTip12 = Math.hypot(wrist.x - hand[12].x, wrist.y - hand[12].y); // Middle Tip
                     const dMcp9 = Math.hypot(wrist.x - hand[9].x, wrist.y - hand[9].y); // Middle Base
+                    const dTip16 = Math.hypot(wrist.x - hand[16].x, wrist.y - hand[16].y); // Ring Tip
+                    const dMcp13 = Math.hypot(wrist.x - hand[13].x, wrist.y - hand[13].y); // Ring Base
                     
-                    // If fingertips are close to the base relative to the wrist, it's curled into a grip
-                    if (dTip8 < dMcp5 * 1.6 && dTip12 < dMcp9 * 1.6) {
+                    // Multiplier reduced to 1.4 -> Requires tighter curl. Prevents false positive scratching.
+                    if (dTip8 < dMcp5 * 1.4 && dTip12 < dMcp9 * 1.4 && dTip16 < dMcp13 * 1.4) {
                         isHandCurled = true;
                     }
                 });
@@ -818,7 +819,7 @@
                     
                     // SMART FILTERS: Reject watches (too small) and laptops (too big)
                     const minDim = Math.min(w, h);
-                    let isTooSmall = minDim < (video.videoWidth * 0.06); // Approx 38px, rejects watches
+                    let isTooSmall = minDim < (video.videoWidth * 0.06); 
                     let isPhoneShape = (ratio > 1.2 && ratio < 3.5) || (ratio < 0.8 && ratio > 0.25); 
                     let isBulky = (w > video.videoWidth * 0.35) || (h > video.videoHeight * 0.35); 
                     
@@ -834,7 +835,7 @@
                     if (overlapsHand) validationScore++;
 
                     if (validationScore >= 2 && !isTooSmall) {
-                        if (obj.score >= 0.45) { // Lowered slightly to catch non-black phones better if shape matches
+                        if (obj.score >= 0.45) { 
                             clearPhoneDetected = true; dbgPhoneConf = obj.score; clearPhoneTime = now;
                             isDanger = true; obj.displayClass = "Phone Detected";
                         } else {
@@ -870,8 +871,8 @@
                 handCentroids.forEach(c => {
                     const distL = Math.hypot(c.x - leftCheek.x, c.y - leftCheek.y);
                     const distR = Math.hypot(c.x - rightCheek.x, c.y - rightCheek.y);
-                    // Require the hand to be curled into a grip to trigger calling behavior (filters out scratching)
-                    if ((distL < 0.15 || distR < 0.15) && isHandCurled) { 
+                    // Required hand to be curled AND tightly close to face (0.12 instead of 0.15)
+                    if ((distL < 0.12 || distR < 0.12) && isHandCurled) { 
                         callingBehavior = true; 
                         suspiciousActivity = true;
                     }
@@ -943,13 +944,13 @@
             }
 
             // B. Alertness (Drowsiness) Score Updates
-            if (currentEyeClosureDuration > 1500) alertnessScore -= (60 * dtSec); // Critical sleep (FASTER DRAIN)
-            else if (currentEyeClosureDuration > 600) alertnessScore -= (30 * dtSec); // Microsleep warning
+            if (currentEyeClosureDuration > 2500) alertnessScore -= (60 * dtSec); // Critical sleep (FASTER DRAIN)
+            else if (currentEyeClosureDuration > 1100) alertnessScore -= (30 * dtSec); // Microsleep warning
             
             if (headPitchRatio > 0.64) alertnessScore -= (20 * dtSec); // Head nodding/drooping
-            if (currentYawnDuration > 1000) alertnessScore -= (15 * dtSec); // Persistent yawning penalty
+            if (currentYawnDuration > 3000) alertnessScore -= (15 * dtSec); // Persistent yawning penalty
             
-            // Rapid blinking penalty (e.g., > 15 blinks in 30s is very high)
+            // Rapid blinking penalty
             if (recentBlinkCount > 15) alertnessScore -= (5 * dtSec); 
             
             // Recovery
@@ -974,17 +975,17 @@
             let audioCritical = false;
 
             // Drowsiness takes absolute priority if critical
-            if (currentEyeClosureDuration > 1500 || fatigueLevel === "Critical Sleep Risk") {
+            if (currentEyeClosureDuration > 2500 || fatigueLevel === "Critical Sleep Risk") {
                 status = "DANGER"; reason = "WAKE UP! CRITICAL FATIGUE DETECTED";
                 triggerAudio = true; audioCritical = true;
                 drawAlertOverlay('#ef4444'); 
             }
-            else if (currentEyeClosureDuration > 600 || fatigueLevel === "Drowsy") {
+            else if (currentEyeClosureDuration > 1100 || fatigueLevel === "Drowsy") {
                 status = "WARNING"; reason = "FATIGUE WARNING: MICROSLEEP DETECTED";
                 triggerAudio = true; audioCritical = false;
                 drawAlertOverlay('#eab308'); // Yellow tint
             }
-            else if (currentYawnDuration > 1500) {
+            else if (currentYawnDuration > 3000) {
                 status = "WARNING"; reason = "DROWSINESS SIGNS: YAWNING DETECTED";
                 triggerAudio = false; 
             }
@@ -1115,7 +1116,7 @@
 
             // Update new eye metrics
             eyeStatusDisplay.innerText = eyeStatus;
-            eyeStatusDisplay.style.color = eyesClosed ? (currentEyeClosureDuration > 1000 ? "var(--danger-color)" : "var(--warning-color)") : "var(--safe-color)";
+            eyeStatusDisplay.style.color = eyesClosed ? (currentEyeClosureDuration > 1100 ? "var(--danger-color)" : "var(--warning-color)") : "var(--safe-color)";
             
             fatigueDisplay.innerText = fatigueLevel;
             fatigueDisplay.style.color = fatigueLevel === "Alert" ? "var(--safe-color)" : (fatigueLevel.includes("Mild") ? "var(--warning-color)" : "var(--danger-color)");
